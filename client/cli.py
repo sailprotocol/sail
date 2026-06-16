@@ -11,10 +11,14 @@ Phase 0 "pays" via the host's /mock/pay shim. Phase 1 pays via the client's own 
 """
 from __future__ import annotations
 
+import json
+import os
+import pathlib
 import sys
 import httpx
 
 from shared import registry
+from shared.config import load_env
 
 
 def pick_host():
@@ -26,15 +30,55 @@ def pick_host():
     return h
 
 
-def pay_invoice(endpoint: str, payment_hash: str) -> str:
-    """Phase 0: ask the mock shim to settle and reveal the preimage.
-    Phase 1: replace with a real LN payment via the client's node."""
-    r = httpx.post(f"{endpoint}/mock/pay", json={"payment_hash": payment_hash})
+def pay_invoice(endpoint: str, ch: dict) -> str:
+    """Obtain the preimage for the challenge by paying.
+
+    PAYMENTS=mock: ask the host's /mock/pay shim to settle and reveal it (Phase 0).
+    PAYMENTS=lnd:  pay the BOLT11 invoice via the client's own LND node; the act of
+                   paying reveals the preimage.
+    """
+    if os.getenv("PAYMENTS", "mock").lower() == "lnd":
+        return lnd_pay(ch["invoice"])
+    r = httpx.post(f"{endpoint}/mock/pay", json={"payment_hash": ch["payment_hash"]})
     r.raise_for_status()
     return r.json()["preimage"]
 
 
+def lnd_pay(invoice: str) -> str:
+    """Pay a BOLT11 invoice via this client's LND node (REST SendPaymentV2) and return
+    the payment preimage (hex). Reads the node's connection details from env only."""
+    host = os.environ["LND_REST_HOST"].rstrip("/")
+    cert = os.environ["LND_TLS_CERT_PATH"]
+    macaroon = pathlib.Path(os.environ["LND_MACAROON_PATH"]).read_bytes().hex()
+    body = {
+        "payment_request": invoice,
+        "timeout_seconds": 60,
+        "fee_limit_msat": "10000",   # generous; regtest direct-channel fees are ~0
+        "no_inflight_updates": True,  # stream only the final result
+    }
+    with httpx.stream(
+        "POST", f"{host}/v2/router/send", json=body,
+        headers={"Grpc-Metadata-macaroon": macaroon},
+        verify=cert, timeout=70.0,
+    ) as r:
+        r.raise_for_status()
+        for line in r.iter_lines():
+            if not line:
+                continue
+            msg = json.loads(line)
+            if "error" in msg:
+                sys.exit(f"LND payment error: {msg['error']}")
+            result = msg.get("result", {})
+            status = result.get("status")
+            if status == "SUCCEEDED":
+                return result["payment_preimage"]
+            if status == "FAILED":
+                sys.exit(f"payment failed: {result.get('failure_reason', 'unknown')}")
+    sys.exit("payment stream ended without a SUCCEEDED result")
+
+
 def main() -> None:
+    load_env()
     prompt = " ".join(sys.argv[1:]) or "Say hello from the network."
     host = pick_host()
     ep = host.endpoint
@@ -48,7 +92,7 @@ def main() -> None:
           f"({ch['amount_msat'] / 1000:.0f} sat). paying...")
 
     # 2) pay -> obtain preimage
-    preimage = pay_invoice(ep, ch["payment_hash"])
+    preimage = pay_invoice(ep, ch)
 
     # 3) retry with L402 auth, stream the response
     auth = f"L402 {ch['macaroon']}:{preimage}"

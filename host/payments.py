@@ -8,8 +8,13 @@ Select with env: PAYMENTS=mock (default) | lnd
 """
 from __future__ import annotations
 
+import base64
 import os
+import pathlib
 import secrets
+
+import httpx
+
 from shared.l402 import sha256_hex
 
 
@@ -45,14 +50,35 @@ class MockLightning(LightningBackend):
 
 
 class LndLightning(LightningBackend):
-    """Phase 1: talk to LND via gRPC/REST. Stub on purpose."""
+    """Real LND over REST. Issues BOLT11 invoices via this host's own node.
+
+    Connection details come from env only (never hardcoded/committed):
+      LND_REST_HOST       e.g. https://127.0.0.1:8084
+      LND_TLS_CERT_PATH   path to that node's tls.cert (used as httpx TLS verify)
+      LND_MACAROON_PATH   path to that node's admin.macaroon (sent hex-encoded)
+
+    The host never learns the preimage — the payer reveals it by paying — so
+    reveal_preimage stays unimplemented (and /mock/pay is disabled when PAYMENTS=lnd).
+    """
 
     def __init__(self) -> None:
-        # TODO: load LND_GRPC_HOST, tls cert, macaroon path from env.
-        raise NotImplementedError(
-            "Phase 1: wire LND here (addinvoice / lookupinvoice). "
-            "Use a dedicated node, NOT the AUPA BTCPay node."
+        host = os.environ["LND_REST_HOST"].rstrip("/")
+        cert = os.environ["LND_TLS_CERT_PATH"]
+        macaroon = pathlib.Path(os.environ["LND_MACAROON_PATH"]).read_bytes().hex()
+        self._client = httpx.Client(
+            base_url=host,
+            verify=cert,
+            headers={"Grpc-Metadata-macaroon": macaroon},
+            timeout=10.0,
         )
+
+    def create_invoice(self, amount_msat: int) -> tuple[str, str]:
+        r = self._client.post("/v1/invoices", json={"value_msat": str(amount_msat)})
+        r.raise_for_status()
+        data = r.json()
+        # r_hash is base64-encoded bytes in LND's REST gateway; we want hex.
+        payment_hash = base64.b64decode(data["r_hash"]).hex()
+        return data["payment_request"], payment_hash
 
 
 def get_backend() -> LightningBackend:

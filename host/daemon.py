@@ -19,6 +19,10 @@ import secrets
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from shared.config import load_env
+
+load_env()  # before any module-level os.getenv below
+
 from shared.l402 import L402Challenge, new_macaroon, parse_authorization, verify
 from shared.listing import HostListing, ModelOffer
 from shared import registry
