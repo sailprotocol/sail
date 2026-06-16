@@ -18,17 +18,24 @@ Guiding rule: **get sats flowing through the smallest possible loop before scali
 
 ---
 
-## Phase 1 — Real rails, your own hosts  *(4–8 weeks — this is Milestone 1 from the spec)*
+## Phase 1 — Real rails, your own hosts  *(this is Milestone 1 from the spec)*
 **Goal:** sats actually flow to *you* from a real model over real Lightning.
 
 **Ships**
-- Swap `MockLightning` → **LND** (regtest first, then mainnet) with real L402 (Aperture or custom against LND gRPC). Dedicated node — **not** AUPA's.
-- Swap `MockModel` → **vLLM** (datacenter cards) or **Ollama/llama.cpp** (consumer cards) serving a real open model.
-- Swap local registry → **real Nostr** relay publish/discover; reach hosts over **Tor**.
-- CSAM image-output hash-check hook live on any image models.
-- You run 1–3 of your own GPU hosts.
+- ✅ Swap `MockLightning` → **LND** with real L402 (REST, via httpx). Dedicated node — **not** AUPA's. *(Done: regtest payment verified end-to-end — dave-host invoice SETTLED `amt_paid_msat=64000`, alice-client payment SUCCEEDED, 0 fee.)*
+- ✅ Swap `MockModel` → **Ollama** serving `qwen3:14b` on the RTX 3060.
+- ☐ Swap local registry → **real Nostr** relay publish/discover; reach hosts over **Tor**. *(next seam)*
+- ☐ CSAM image-output hash-check hook live on any image models.
+- ☐ Mainnet: point `LND_*` env vars at a real node (no code change).
+- ☐ Run 1–3 of your own GPU hosts.
 
 **Exit criteria:** a prompt from the client runs on your real host, settles real (or regtest) sats per token, and the listing is discoverable over Nostr.
+
+> **Known refinement — metered settlement (prepay gap).** Current model invoices the full
+> `max_tokens × price` upfront and settles it regardless of how many tokens are actually
+> delivered (e.g., 64 sat paid for 28 tokens). For a fair product, move to metered
+> settlement: a fresh micro-invoice every N streamed tokens, **or** a prepaid session
+> balance where unused sats carry forward as credit (no refunds needed). Target: Phase 2/3.
 
 ---
 

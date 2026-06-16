@@ -33,7 +33,9 @@ from host import moderation
 app = FastAPI(title="inference-net host")
 
 # --- host identity & config -------------------------------------------------
-PUBKEY = os.getenv("HOST_PUBKEY", "host_" + secrets.token_hex(8))
+# With REGISTRY=nostr the listing identity IS the host's Nostr pubkey; otherwise (local)
+# fall back to HOST_PUBKEY or a random dev identity.
+PUBKEY = registry.host_identity() or os.getenv("HOST_PUBKEY", "host_" + secrets.token_hex(8))
 PORT = int(os.getenv("PORT", "8001"))
 ENDPOINT = os.getenv("HOST_ENDPOINT", f"http://127.0.0.1:{PORT}")
 PRICE_MSAT_PER_TOKEN = int(os.getenv("PRICE_MSAT_PER_TOKEN", "1000"))  # 1 sat/token (demo)
