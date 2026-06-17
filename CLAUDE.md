@@ -61,5 +61,6 @@ client, relays). See `ROADMAP.md` for phases.
 - **Keep the core open.** No closed or proprietary hard dependencies inside the protocol/client.
 
 ## Current phase
-**Phase 1** — replace `MockLightning` with real **LND over regtest** so sats settle through
-the L402 handshake. Model seam is already real (Ollama). Next after LND: Nostr discovery.
+**Phase 1** — three seams now real: **LND over regtest** (sats settle through the L402
+handshake), the model (Ollama), and **Nostr discovery** (`REGISTRY=nostr` publish/subscribe).
+Next: reach hosts over **Tor**, then mainnet LND. (Mock/local paths all still selectable.)
