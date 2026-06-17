@@ -107,13 +107,18 @@ def main() -> None:
     # 2) pay -> obtain preimage
     preimage = pay_invoice(ep, ch, proxy)
 
-    # 3) retry with L402 auth, stream the response
+    # 3) retry with L402 auth, stream the response.
+    # Generous read timeout for THIS request only: a cold-loading reasoning model
+    # (e.g. qwen3:14b) can take well over httpx's 5s default to emit its first token.
+    # The quick 402/payment calls above keep the short default; a hung host is still bounded.
     auth = f"L402 {ch['macaroon']}:{preimage}"
+    stream_timeout = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
     print("[client] response:\n")
     spent_msat = 0
     with httpx.stream("POST", f"{ep}/v1/inference",
                       json={"prompt": prompt, "max_tokens": 64},
-                      headers={"Authorization": auth}, proxy=proxy) as s:
+                      headers={"Authorization": auth},
+                      timeout=stream_timeout, proxy=proxy) as s:
         for chunk in s.iter_text():
             if "__SPENT_MSAT__:" in chunk:
                 text, _, meta = chunk.partition("__SPENT_MSAT__:")
