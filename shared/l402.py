@@ -17,12 +17,32 @@ LND reveals it only after a real settled payment (Phase 1).
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 from dataclasses import dataclass
 
 
 def sha256_hex(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
+
+
+# --- metered settlement (chunked L402) -------------------------------------
+# A paid chunk's response is a text/plain stream of tokens followed by ONE trailer line:
+#   __L402_NEXT__:<json challenge>   another chunk remains; pay it to continue
+#   __L402_DONE__:<json {spent_msat}>  generation finished; stop
+# Reuses the in-band trailer convention of __SPENT_MSAT__ so the stream stays plain text.
+NEXT_MARKER = "__L402_NEXT__:"
+DONE_MARKER = "__L402_DONE__:"
+
+
+def next_trailer(challenge: dict) -> str:
+    """Trailer telling the client to pay `challenge` for the next chunk."""
+    return NEXT_MARKER + json.dumps(challenge)
+
+
+def done_trailer(spent_msat: int) -> str:
+    """Trailer telling the client generation is complete and what it was billed."""
+    return DONE_MARKER + json.dumps({"spent_msat": spent_msat})
 
 
 @dataclass

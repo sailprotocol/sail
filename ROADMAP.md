@@ -34,11 +34,12 @@ Guiding rule: **get sats flowing through the smallest possible loop before scali
 
 **Exit criteria:** ✅ met for the text path — a prompt from the client runs on the real host, settles regtest sats per token, and the listing is discoverable over Nostr (and reachable over Tor from any network).
 
-> **Known refinement — metered settlement (prepay gap).** Current model invoices the full
-> `max_tokens × price` upfront and settles it regardless of how many tokens are actually
-> delivered (e.g., 64 sat paid for 28 tokens). For a fair product, move to metered
-> settlement: a fresh micro-invoice every N streamed tokens, **or** a prepaid session
-> balance where unused sats carry forward as credit (no refunds needed). Target: Phase 2/3.
+> **✅ Metered settlement (prepay gap) — done (Phase 2).** Was: invoice the full
+> `max_tokens × price` upfront and settle it regardless of tokens delivered (64 sat for 28
+> tokens). Now: **pay-as-you-go chunks** — the host sells tokens in `CHUNK_TOKENS`-sized
+> chunks, each its own L402 payment, and only invoices the next chunk if more output remains
+> (1-token look-ahead). The client pays for tokens actually delivered; overpay is bounded to
+> **< 1 chunk** (zero with `CHUNK_TOKENS=1`). No client identity, credit state, or refunds.
 
 ---
 

@@ -42,7 +42,7 @@ client, relays). See `ROADMAP.md` for phases.
   - `MODEL` = `mock` | `ollama`; `OLLAMA_MODEL`, `OLLAMA_URL`
   - `REGISTRY` = `local` | `nostr`; `NOSTR_RELAYS` (comma-separated), `NOSTR_HOST_NSEC` (host only, never commit)
   - `TRANSPORT` = `clearnet` | `tor`; `TOR_CONTROL_PORT`, `ONION_KEY_PATH` (host, key never commit), `TOR_SOCKS` (client)
-  - `PORT`, `HOST_ENDPOINT`, `PRICE_MSAT_PER_TOKEN`
+  - `PORT`, `HOST_ENDPOINT`, `PRICE_MSAT_PER_TOKEN`, `CHUNK_TOKENS` (metered-settlement chunk size)
 
 ## Run & test
 - **Smoke test (must always pass):** `PAYMENTS=mock MODEL=mock PYTHONPATH=. .venv/bin/python smoke_test.py`

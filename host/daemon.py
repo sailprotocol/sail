@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import time
 
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -23,7 +24,10 @@ from shared.config import load_env
 
 load_env()  # before any module-level os.getenv below
 
-from shared.l402 import L402Challenge, new_macaroon, parse_authorization, verify
+from shared.l402 import (
+    L402Challenge, new_macaroon, parse_authorization, verify,
+    next_trailer, done_trailer,
+)
 from shared.listing import HostListing, ModelOffer
 from shared import registry
 from host import model as model_mod
@@ -41,12 +45,46 @@ PORT = int(os.getenv("PORT", "8001"))
 ENDPOINT = os.getenv("HOST_ENDPOINT", f"http://127.0.0.1:{PORT}")
 PRICE_MSAT_PER_TOKEN = int(os.getenv("PRICE_MSAT_PER_TOKEN", "1000"))  # 1 sat/token (demo)
 TRANSPORT = os.getenv("TRANSPORT", "clearnet").lower()  # clearnet | tor
+CHUNK_TOKENS = max(1, int(os.getenv("CHUNK_TOKENS", "8")))  # metered settlement granularity
+SESSION_TTL = 300  # seconds; evict abandoned generation sessions
 
 _model = model_mod.get_backend()
 _ln = pay_mod.get_backend()
 
-# macaroon -> (payment_hash, amount_msat); pending until paid
-_pending: dict[str, tuple[str, int]] = {}
+# Metered settlement: generation runs in chunks, each chunk paid via its own L402 challenge,
+# so the client pays for tokens actually delivered (overpay bounded to < 1 chunk) instead of
+# prepaying max_tokens. State is per-generation and ephemeral — nothing persists across requests.
+#
+# macaroon -> (session_id, payment_hash, amount_msat, chunk_tokens); single-use, deleted on pay
+_pending: dict[str, tuple[str, str, int, int]] = {}
+# session_id -> live generation state for one streamed response
+_sessions: dict[str, dict] = {}
+_NOTHING = object()  # 1-token look-ahead sentinel (distinguishes "no buffered token")
+
+
+def _evict_stale() -> None:
+    now = time.time()
+    for sid in [s for s, v in _sessions.items() if now - v["created"] > SESSION_TTL]:
+        gen = _sessions[sid].get("gen")
+        if gen is not None:
+            try:
+                gen.close()
+            except Exception:
+                pass
+        _sessions.pop(sid, None)
+
+
+def _issue_chunk_challenge(sid: str) -> dict:
+    """Invoice the next chunk for a session and register a single-use macaroon."""
+    s = _sessions[sid]
+    chunk = min(s["chunk_tokens"], s["max_tokens"] - s["emitted"])
+    amount_msat = chunk * PRICE_MSAT_PER_TOKEN
+    bolt11, payment_hash = _ln.create_invoice(amount_msat)
+    macaroon = new_macaroon()
+    _pending[macaroon] = (sid, payment_hash, amount_msat, chunk)
+    s["charged_msat"] += amount_msat
+    return {"session_id": sid, "macaroon": macaroon, "invoice": bolt11,
+            "payment_hash": payment_hash, "amount_msat": amount_msat}
 
 
 @app.on_event("startup")
@@ -83,42 +121,80 @@ async def inference(request: Request, authorization: str | None = Header(default
 
     creds = parse_authorization(authorization)
 
-    # No valid creds -> issue an L402 challenge sized to the requested work.
+    # No valid creds -> start a session and issue the FIRST chunk's L402 challenge.
+    # No generation happens yet, so an unpaid request never costs the host compute.
     if creds is None:
-        amount_msat = max_tokens * PRICE_MSAT_PER_TOKEN
-        bolt11, payment_hash = _ln.create_invoice(amount_msat)
-        macaroon = new_macaroon()
-        _pending[macaroon] = (payment_hash, amount_msat)
-        ch = L402Challenge(macaroon, bolt11, payment_hash, amount_msat)
-        return JSONResponse(
-            {"macaroon": macaroon, "invoice": bolt11,
-             "payment_hash": payment_hash, "amount_msat": amount_msat},
-            status_code=402,
-            headers={"WWW-Authenticate": ch.www_authenticate()},
-        )
+        _evict_stale()
+        sid = secrets.token_hex(8)
+        chunk_tokens = max(1, int(body.get("chunk_tokens", CHUNK_TOKENS)))
+        _sessions[sid] = {
+            "prompt": prompt, "max_tokens": max_tokens, "chunk_tokens": chunk_tokens,
+            "gen": None, "buf": _NOTHING, "emitted": 0, "charged_msat": 0,
+            "created": time.time(),
+        }
+        ch = _issue_chunk_challenge(sid)
+        l402 = L402Challenge(ch["macaroon"], ch["invoice"], ch["payment_hash"], ch["amount_msat"])
+        return JSONResponse(ch, status_code=402,
+                            headers={"WWW-Authenticate": l402.www_authenticate()})
 
+    # Valid creds -> redeem one paid chunk: verify, stream up to chunk tokens, then either
+    # hand back the next chunk's challenge (__L402_NEXT__) or finish (__L402_DONE__).
     macaroon, preimage = creds
     bound = _pending.get(macaroon)
     if bound is None:
         return JSONResponse({"error": "unknown macaroon"}, status_code=402)
-    payment_hash, amount_msat = bound
+    sid, payment_hash, amount_msat, chunk = bound
     if not verify(preimage, payment_hash):
         return JSONResponse({"error": "invalid preimage"}, status_code=402)
+    del _pending[macaroon]  # single-use
+    s = _sessions.get(sid)
+    if s is None:
+        return JSONResponse({"error": "unknown or expired session"}, status_code=410)
 
-    # Paid. Stream tokens, metering as we go. Single-use macaroon for v0.
-    del _pending[macaroon]
+    def chunk_stream():
+        if s["gen"] is None:
+            s["gen"] = _model.stream(s["prompt"])  # lazy: only after first payment
+        gen = s["gen"]
 
-    def token_stream():
-        spent = 0
-        for i, tok in enumerate(_model.stream(prompt)):
-            if i >= max_tokens:
+        def _next_token():
+            if s["buf"] is not _NOTHING:  # deliver the look-ahead token first
+                tok, s["buf"] = s["buf"], _NOTHING
+                return tok
+            return next(gen)  # raises StopIteration when the model is done
+
+        allow = min(chunk, s["max_tokens"] - s["emitted"])
+        exhausted = False
+        for _ in range(allow):
+            try:
+                tok = _next_token()
+            except StopIteration:
+                exhausted = True
                 break
-            spent += PRICE_MSAT_PER_TOKEN
+            s["emitted"] += 1
             yield tok
-        # trailer line the client can parse for the metered total
-        yield f"\n__SPENT_MSAT__:{spent}"
 
-    return StreamingResponse(token_stream(), media_type="text/plain")
+        # Look ahead one token: only invoice another chunk if more output actually exists
+        # (and we're under max_tokens) — this avoids billing an empty trailing chunk.
+        more = False
+        if not exhausted and s["emitted"] < s["max_tokens"]:
+            try:
+                s["buf"] = next(gen)
+                more = True
+            except StopIteration:
+                s["buf"] = _NOTHING
+
+        if more:
+            yield next_trailer(_issue_chunk_challenge(sid))
+        else:
+            spent = s["charged_msat"]
+            try:
+                gen.close()
+            except Exception:
+                pass
+            _sessions.pop(sid, None)
+            yield done_trailer(spent)
+
+    return StreamingResponse(chunk_stream(), media_type="text/plain")
 
 
 # --- PHASE 0 ONLY -----------------------------------------------------------

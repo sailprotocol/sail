@@ -19,6 +19,7 @@ import httpx
 
 from shared import registry
 from shared.config import load_env
+from shared.l402 import NEXT_MARKER, DONE_MARKER
 
 
 def pick_host():
@@ -96,40 +97,45 @@ def main() -> None:
     if proxy:
         print(f"[client] .onion host -> routing over Tor ({proxy})")
 
-    # 1) request inference, expect a 402 challenge
+    # 1) start a session: request with no creds -> the first chunk's 402 challenge.
     r = httpx.post(f"{ep}/v1/inference", json={"prompt": prompt, "max_tokens": 64}, proxy=proxy)
     if r.status_code != 402:
         sys.exit(f"expected 402, got {r.status_code}: {r.text}")
     ch = r.json()
-    print(f"[client] 402: invoice for {ch['amount_msat']} msat "
-          f"({ch['amount_msat'] / 1000:.0f} sat). paying...")
-
-    # 2) pay -> obtain preimage
-    preimage = pay_invoice(ep, ch, proxy)
-
-    # 3) retry with L402 auth, stream the response.
-    # Generous read timeout for THIS request only: a cold-loading reasoning model
-    # (e.g. qwen3:14b) can take well over httpx's 5s default to emit its first token.
-    # The quick 402/payment calls above keep the short default; a hung host is still bounded.
-    auth = f"L402 {ch['macaroon']}:{preimage}"
-    stream_timeout = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
+    print(f"[client] 402: first chunk {ch['amount_msat']} msat. "
+          f"paying per chunk as it streams (metered)...")
     print("[client] response:\n")
+
+    # 2) metered loop: pay a chunk, stream it, follow the trailer to the next chunk until done —
+    # so we pay for tokens actually delivered, not max_tokens. Generous per-chunk read timeout
+    # (cold model + Tor latency); a hung host is still bounded.
+    stream_timeout = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
     spent_msat = 0
-    with httpx.stream("POST", f"{ep}/v1/inference",
-                      json={"prompt": prompt, "max_tokens": 64},
-                      headers={"Authorization": auth},
-                      timeout=stream_timeout, proxy=proxy) as s:
-        for chunk in s.iter_text():
-            if "__SPENT_MSAT__:" in chunk:
-                text, _, meta = chunk.partition("__SPENT_MSAT__:")
-                sys.stdout.write(text)
-                spent_msat = int(meta.strip())
-            else:
-                sys.stdout.write(chunk)
-            sys.stdout.flush()
+    while True:
+        preimage = pay_invoice(ep, ch, proxy)
+        spent_msat += ch["amount_msat"]            # what we actually paid for this chunk
+        auth = f"L402 {ch['macaroon']}:{preimage}"
+        with httpx.stream("POST", f"{ep}/v1/inference",
+                          json={"session_id": ch.get("session_id")},
+                          headers={"Authorization": auth},
+                          timeout=stream_timeout, proxy=proxy) as s:
+            if s.status_code != 200:
+                sys.exit(f"chunk failed: {s.status_code} {s.read().decode(errors='replace')}")
+            body = "".join(s.iter_text())          # one chunk is small; buffer to parse the trailer
+        if DONE_MARKER in body:
+            text, _, _meta = body.partition(DONE_MARKER)
+            sys.stdout.write(text); sys.stdout.flush()
+            break
+        if NEXT_MARKER in body:
+            text, _, meta = body.partition(NEXT_MARKER)
+            sys.stdout.write(text); sys.stdout.flush()
+            ch = json.loads(meta)                  # pay the next chunk on the next loop
+            continue
+        sys.stdout.write(body); sys.stdout.flush()  # no trailer (shouldn't happen) -> stop
+        break
 
     print(f"\n\n[client] done. spent {spent_msat} msat "
-          f"(~{spent_msat / 1000:.0f} sat).")
+          f"(~{spent_msat / 1000:.0f} sat) across metered chunks.")
 
 
 if __name__ == "__main__":
