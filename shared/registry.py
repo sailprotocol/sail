@@ -16,9 +16,18 @@ import os
 import pathlib
 
 from shared.listing import HostListing, LISTING_KIND
+from shared.pow import leading_zero_bits, nip01_id, mine
 
 # Value of the "n" tag that scopes our listings on shared public relays.
 NOSTR_TAG_VALUE = "inference-net-v0"
+
+
+def _pow_target() -> int:
+    return int(os.getenv("POW_TARGET", "16"))      # leading-zero bits the host mines (anti-spam)
+
+
+def _pow_min() -> int:
+    return int(os.getenv("POW_MIN_DIFFICULTY", "8"))  # listings below this are rejected by clients
 
 
 class RegistryBackend:
@@ -42,15 +51,22 @@ class LocalRegistry(RegistryBackend):
     def publish(self, listing: HostListing) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
         event = listing.to_nostr_event()
+        target = _pow_target()
+        if target > 0:
+            mine(event, target)  # NIP-13 proof-of-work, same as the real Nostr path
         (self.dir / f"{listing.pubkey}.json").write_text(json.dumps(event))
 
     def discover(self) -> list[HostListing]:
         if not self.dir.exists():
             return []
+        min_diff = _pow_min()
         out = []
         for f in self.dir.glob("*.json"):
             try:
-                out.append(HostListing.from_nostr_event(json.loads(f.read_text())))
+                event = json.loads(f.read_text())
+                if min_diff > 0 and leading_zero_bits(nip01_id(event)) < min_diff:
+                    continue  # reject under-difficulty listings
+                out.append(HostListing.from_nostr_event(event))
             except Exception:
                 continue
         return out
@@ -97,11 +113,13 @@ class NostrRegistry(RegistryBackend):
 
         keys = Keys.parse(os.environ["NOSTR_HOST_NSEC"])
         ev = listing.to_nostr_event()  # reuse the canonical content + tags
-        signed = (
-            EventBuilder(Kind(LISTING_KIND), ev["content"])
-            .tags([Tag.parse(t) for t in ev["tags"]])
-            .sign_with_keys(keys)
+        builder = EventBuilder(Kind(LISTING_KIND), ev["content"]).tags(
+            [Tag.parse(t) for t in ev["tags"]]
         )
+        target = _pow_target()
+        if target > 0:
+            builder = builder.pow(target)  # NIP-13: mine a nonce into the signed event id
+        signed = builder.sign_with_keys(keys)
         relays = self.relays
 
         async def _go():
@@ -133,6 +151,7 @@ class NostrRegistry(RegistryBackend):
             await client.shutdown()
             return out
 
+        min_diff = _pow_min()
         by_pubkey: dict[str, HostListing] = {}
         for ev in _run(_go):
             if not ev.verify():  # schnorr signature + event id check
@@ -140,6 +159,8 @@ class NostrRegistry(RegistryBackend):
             tags = [t.as_vec() for t in ev.tags().to_vec()]
             if not any(len(t) >= 2 and t[0] == "n" and t[1] == NOSTR_TAG_VALUE for t in tags):
                 continue
+            if min_diff > 0 and leading_zero_bits(ev.id().to_hex()) < min_diff:
+                continue  # reject listings below the client's minimum PoW difficulty
             try:
                 listing = HostListing.from_nostr_event(
                     {

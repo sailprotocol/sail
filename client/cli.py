@@ -15,19 +15,27 @@ import json
 import os
 import pathlib
 import sys
+import time
 import httpx
 
 from shared import registry
 from shared.config import load_env
 from shared.l402 import NEXT_MARKER, DONE_MARKER
+from client import reputation
 
 
 def pick_host():
+    # discover() already drops listings below POW_MIN_DIFFICULTY (anti-spam); rank() orders by
+    # the client's own past experience and drops hosts that have repeatedly failed it.
     hosts = registry.discover()
     if not hosts:
-        sys.exit("No hosts found. Start a host daemon first (see README).")
-    h = hosts[0]  # Phase 2: rank by price * reputation
-    print(f"[client] using host {h.pubkey} -> {h.models[0].name} @ {h.endpoint}")
+        sys.exit("No hosts found (none discovered, or all below the PoW minimum difficulty).")
+    ranked = reputation.rank(hosts, reputation.load())
+    if not ranked:
+        sys.exit("All discovered hosts were dropped by local reputation (repeated failures).")
+    h = ranked[0]
+    bond = f" | bond {h.bond_txid} (advisory)" if getattr(h, "bond_txid", None) else ""
+    print(f"[client] using host {h.pubkey} -> {h.models[0].name} @ {h.endpoint}{bond}")
     return h
 
 
@@ -97,45 +105,55 @@ def main() -> None:
     if proxy:
         print(f"[client] .onion host -> routing over Tor ({proxy})")
 
-    # 1) start a session: request with no creds -> the first chunk's 402 challenge.
-    r = httpx.post(f"{ep}/v1/inference", json={"prompt": prompt, "max_tokens": 64}, proxy=proxy)
-    if r.status_code != 402:
-        sys.exit(f"expected 402, got {r.status_code}: {r.text}")
-    ch = r.json()
-    print(f"[client] 402: first chunk {ch['amount_msat']} msat. "
-          f"paying per chunk as it streams (metered)...")
-    print("[client] response:\n")
-
-    # 2) metered loop: pay a chunk, stream it, follow the trailer to the next chunk until done —
-    # so we pay for tokens actually delivered, not max_tokens. Generous per-chunk read timeout
-    # (cold model + Tor latency); a hung host is still bounded.
-    stream_timeout = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
+    # Time the whole exchange and record the outcome against THIS host in local reputation,
+    # whether it succeeds or fails. ok stays False on any sys.exit/exception (finally runs).
+    t0 = time.monotonic()
+    ok = False
     spent_msat = 0
-    while True:
-        preimage = pay_invoice(ep, ch, proxy)
-        spent_msat += ch["amount_msat"]            # what we actually paid for this chunk
-        auth = f"L402 {ch['macaroon']}:{preimage}"
-        with httpx.stream("POST", f"{ep}/v1/inference",
-                          json={"session_id": ch.get("session_id")},
-                          headers={"Authorization": auth},
-                          timeout=stream_timeout, proxy=proxy) as s:
-            if s.status_code != 200:
-                sys.exit(f"chunk failed: {s.status_code} {s.read().decode(errors='replace')}")
-            body = "".join(s.iter_text())          # one chunk is small; buffer to parse the trailer
-        if DONE_MARKER in body:
-            text, _, _meta = body.partition(DONE_MARKER)
-            sys.stdout.write(text); sys.stdout.flush()
+    try:
+        # 1) start a session: request with no creds -> the first chunk's 402 challenge.
+        r = httpx.post(f"{ep}/v1/inference", json={"prompt": prompt, "max_tokens": 64}, proxy=proxy)
+        if r.status_code != 402:
+            sys.exit(f"expected 402, got {r.status_code}: {r.text}")
+        ch = r.json()
+        print(f"[client] 402: first chunk {ch['amount_msat']} msat. "
+              f"paying per chunk as it streams (metered)...")
+        print("[client] response:\n")
+
+        # 2) metered loop: pay a chunk, stream it, follow the trailer to the next chunk until done —
+        # so we pay for tokens actually delivered, not max_tokens. Generous per-chunk read timeout
+        # (cold model + Tor latency); a hung host is still bounded.
+        stream_timeout = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
+        while True:
+            preimage = pay_invoice(ep, ch, proxy)
+            spent_msat += ch["amount_msat"]            # what we actually paid for this chunk
+            auth = f"L402 {ch['macaroon']}:{preimage}"
+            with httpx.stream("POST", f"{ep}/v1/inference",
+                              json={"session_id": ch.get("session_id")},
+                              headers={"Authorization": auth},
+                              timeout=stream_timeout, proxy=proxy) as s:
+                if s.status_code != 200:
+                    sys.exit(f"chunk failed: {s.status_code} {s.read().decode(errors='replace')}")
+                body = "".join(s.iter_text())          # one chunk is small; buffer to parse the trailer
+            if DONE_MARKER in body:
+                text, _, _meta = body.partition(DONE_MARKER)
+                sys.stdout.write(text); sys.stdout.flush()
+                break
+            if NEXT_MARKER in body:
+                text, _, meta = body.partition(NEXT_MARKER)
+                sys.stdout.write(text); sys.stdout.flush()
+                ch = json.loads(meta)                  # pay the next chunk on the next loop
+                continue
+            sys.stdout.write(body); sys.stdout.flush()  # no trailer (shouldn't happen) -> stop
             break
-        if NEXT_MARKER in body:
-            text, _, meta = body.partition(NEXT_MARKER)
-            sys.stdout.write(text); sys.stdout.flush()
-            ch = json.loads(meta)                  # pay the next chunk on the next loop
-            continue
-        sys.stdout.write(body); sys.stdout.flush()  # no trailer (shouldn't happen) -> stop
-        break
+        ok = True
+    finally:
+        latency_ms = (time.monotonic() - t0) * 1000
+        reputation.record(host.pubkey, success=ok,
+                          latency_ms=(latency_ms if ok else None))
 
     print(f"\n\n[client] done. spent {spent_msat} msat "
-          f"(~{spent_msat / 1000:.0f} sat) across metered chunks.")
+          f"(~{spent_msat / 1000:.0f} sat) across metered chunks in {latency_ms / 1000:.1f}s.")
 
 
 if __name__ == "__main__":

@@ -8,3 +8,5 @@ registry/
 # Tor onion service private key — secret, never commit.
 *.key
 onion.key
+# Client-side reputation (local first-party experience) — machine-specific, not committed.
+client_reputation.json
