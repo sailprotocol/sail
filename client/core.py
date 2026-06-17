@@ -18,12 +18,15 @@ import httpx
 
 from shared import registry
 from shared.l402 import NEXT_MARKER, DONE_MARKER
+from host import moderation
 from client import reputation
 
 
 def discover_hosts() -> list:
-    """Discovered hosts (already PoW-filtered by registry), ranked by local reputation."""
-    return reputation.rank(registry.discover(), reputation.load())
+    """Discovered hosts (already PoW-filtered by registry), filtered to the client's model
+    allowlist (if configured), then ranked by local reputation."""
+    hosts = [h for h in registry.discover() if moderation.is_model_allowed(h.models[0].name)]
+    return reputation.rank(hosts, reputation.load())
 
 
 def proxy_for(endpoint: str) -> str | None:

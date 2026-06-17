@@ -90,6 +90,9 @@ def _issue_chunk_challenge(sid: str) -> dict:
 @app.on_event("startup")
 def publish_listing() -> None:
     global ENDPOINT
+    # Moderation gate: refuse to start serving a disallowed model, or any image-modality model
+    # without a real CSAM matcher. Fail loudly here rather than per-request.
+    moderation.assert_can_serve(_model)
     if TRANSPORT == "tor":
         # Expose the daemon as a .onion and advertise THAT as the endpoint.
         ENDPOINT = transport.setup_onion(PORT)
@@ -98,7 +101,7 @@ def publish_listing() -> None:
         pubkey=PUBKEY,
         endpoint=ENDPOINT,
         models=[ModelOffer(name=_model.name, price_msat_per_token=PRICE_MSAT_PER_TOKEN,
-                           context_window=8192)],
+                           context_window=8192, modality=_model.modality)],
     )
     registry.publish(listing)  # Phase 1: publish signed Nostr event to relays
     print(f"[host] published listing: {PUBKEY} serving {_model.name} @ {ENDPOINT}")
@@ -116,7 +119,7 @@ async def inference(request: Request, authorization: str | None = Header(default
     prompt = body.get("prompt", "")
     max_tokens = int(body.get("max_tokens", 64))
 
-    if not moderation.model_allowed(_model.name, allowlist=None):
+    if not moderation.is_model_allowed(_model.name):
         return JSONResponse({"error": "model not on network allowlist"}, status_code=451)
 
     creds = parse_authorization(authorization)

@@ -12,6 +12,7 @@ from typing import Iterator
 
 class ModelBackend:
     name: str
+    modality: str = "text"  # "text" | "image" | "code"; image models are gated by moderation
 
     def stream(self, prompt: str) -> Iterator[str]:
         """Yield output tokens one at a time."""
@@ -20,6 +21,7 @@ class ModelBackend:
 
 class MockModel(ModelBackend):
     name = "mock-echo:1b"
+    modality = "text"
 
     def stream(self, prompt: str) -> Iterator[str]:
         reply = (

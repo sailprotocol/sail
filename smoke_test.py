@@ -6,19 +6,44 @@ Run:  PYTHONPATH=. python3 smoke_test.py
 """
 import json
 import os
+import types
 os.environ.setdefault("PAYMENTS", "mock")
 os.environ.setdefault("MODEL", "mock")
 os.environ.setdefault("POW_TARGET", "8")          # trivial difficulty: mines instantly
 os.environ.setdefault("POW_MIN_DIFFICULTY", "8")  # client rejects listings below this
+os.environ.setdefault("MODEL_ALLOWLIST", "mock-echo:1b")  # enforce allowlist; mock is allowed
 
 from fastapi.testclient import TestClient
 from host.daemon import app, PRICE_MSAT_PER_TOKEN
 from shared import registry
 from shared.l402 import NEXT_MARKER, DONE_MARKER
 from shared import pow as powmod
+from host import moderation
+
+
+def check_moderation() -> None:
+    # Allow path: the served mock model is on the allowlist (set above).
+    assert moderation.is_model_allowed("mock-echo:1b"), "allowlisted model should serve"
+    # Deny path: a model not on the allowlist is refused.
+    assert not moderation.is_model_allowed("evil-model:70b"), "non-allowlisted model must be refused"
+    # CSAM gate is fail-closed: no matcher configured -> image output blocked.
+    try:
+        moderation.check_image_output(b"\x89PNG...")
+        raise AssertionError("check_image_output must raise without a configured matcher")
+    except moderation.ModerationError:
+        pass
+    # Image-modality model refused to serve without a matcher.
+    img_model = types.SimpleNamespace(name="mock-echo:1b", modality="image")
+    try:
+        moderation.assert_can_serve(img_model)
+        raise AssertionError("image-modality model must be refused without a CSAM matcher")
+    except moderation.ModerationError:
+        pass
+    print("[test] moderation: allowlist enforced, image gate fail-closed")
 
 
 def main() -> None:
+    check_moderation()
     with TestClient(app) as c:  # startup publishes the (PoW-mined) listing
         hosts = registry.discover()
         assert hosts, "no hosts discovered (PoW gate too strict, or publish failed)"

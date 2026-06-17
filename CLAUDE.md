@@ -20,7 +20,7 @@ client, relays). See `ROADMAP.md` for phases.
 - `host/payments.py`: `MockLightning` → `LndLightning` (regtest → mainnet)
 - `host/model.py`: `MockModel` → `OllamaModel`/vLLM  *(Ollama already wired: `qwen3:14b` on local RTX 3060)*
 - `shared/registry.py`: local dir → Nostr relays *(`REGISTRY=nostr` done)*; reach hosts over Tor via `TRANSPORT=tor` (`host/transport.py`)
-- `host/moderation.py`: stubs → real CSAM image-hash matching + governance allowlist
+- `host/moderation.py`: allowlist mechanism + fail-closed CSAM image gate done; real hash-DB matcher (PhotoDNA/NCMEC, needs enrollment) + allowlist governance deferred to Phase 4
 
 ## Repo layout
 `shared/` (listing, l402, registry) · `host/` (daemon, payments, model, moderation) ·
@@ -43,6 +43,7 @@ client, relays). See `ROADMAP.md` for phases.
   - `REGISTRY` = `local` | `nostr`; `NOSTR_RELAYS` (comma-separated), `NOSTR_HOST_NSEC` (host only, never commit)
   - `TRANSPORT` = `clearnet` | `tor`; `TOR_CONTROL_PORT`, `ONION_KEY_PATH` (host, key never commit), `TOR_SOCKS` (client)
   - `POW_TARGET` (host, NIP-13 listing PoW bits), `POW_MIN_DIFFICULTY` (client rejects below), `REPUTATION_PATH` (client, gitignored)
+  - `MODEL_ALLOWLIST` / `MODEL_ALLOWLIST_PATH` (host refuses to serve + client filters; unset = permissive), `CSAM_HASHER` (image gate; unset = image disabled, fail-closed)
   - `PORT`, `HOST_ENDPOINT`, `PRICE_MSAT_PER_TOKEN`, `CHUNK_TOKENS` (metered-settlement chunk size)
 
 ## Run & test
