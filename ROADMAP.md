@@ -86,6 +86,19 @@ Guiding rule: **get sats flowing through the smallest possible loop before scali
 
 ---
 
+## GUI / client backlog
+Follow-ups for the web client (`client/webapp.py` + `client/static/`, shared logic in
+`client/core.py`). Not blocking; pick up alongside Phase 2/3.
+- **Host-unreachable UX.** When a host fails to connect/stream, show a friendly
+  "host unreachable — trying another" state instead of a raw errno, and auto-skip /
+  deprioritize dead hosts. Lean on the existing reputation drop logic (`client/reputation.py`):
+  a failure is already recorded, so re-rank and fail over to the next-best host automatically.
+- **Session history.** Persist past inference sessions locally (prompt, response, host pubkey,
+  sats spent, timestamp); let the GUI list previous sessions and reopen them. Gitignored, like
+  the reputation store.
+
+---
+
 ## Sequencing notes
 - Phases 0→1 are strictly sequential. 2, 3, 4 overlap.
 - Don't build verification beyond reputation, the token model, or mobile until the paid loop has real users.
