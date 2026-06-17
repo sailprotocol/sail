@@ -48,7 +48,8 @@ client, relays). See `ROADMAP.md` for phases.
 ## Run & test
 - **Smoke test (must always pass):** `PAYMENTS=mock MODEL=mock PYTHONPATH=. .venv/bin/python smoke_test.py`
 - Host (real model + regtest LND): `ENV_FILE=.env.host PYTHONPATH=. .venv/bin/uvicorn host.daemon:app --port 8001`
-- Client (regtest LND): `ENV_FILE=.env.client PYTHONPATH=. .venv/bin/python -m client.cli "your prompt"`
+- Client CLI (regtest LND): `ENV_FILE=.env.client PYTHONPATH=. .venv/bin/python -m client.cli "your prompt"`
+- Client GUI (local web app): `ENV_FILE=.env.client PYTHONPATH=. .venv/bin/uvicorn client.webapp:app --port 8080` → open `http://127.0.0.1:8080`. CLI + GUI share `client/core.py`. (Tauri/desktop packaging deferred to a later task.)
 
 ## Conventions
 - Keep backends behind their interfaces (`LightningBackend`, `ModelBackend`); select via env vars.
