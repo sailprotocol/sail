@@ -62,6 +62,10 @@ client, relays). See `ROADMAP.md` for phases.
 - **Keep the core open.** No closed or proprietary hard dependencies inside the protocol/client.
 
 ## Current phase
-**Phase 1** — three seams now real: **LND over regtest** (sats settle through the L402
-handshake), the model (Ollama), and **Nostr discovery** (`REGISTRY=nostr` publish/subscribe).
-Next: reach hosts over **Tor**, then mainnet LND. (Mock/local paths all still selectable.)
+**Phase 2** — Phase 1's core code is **done & verified**: LND/L402 payments, Ollama
+inference, Nostr discovery, and Tor `.onion` transport all run end-to-end (mock/local paths
+still selectable via env). Verified cross-network (Starlink → home host over a public relay +
+Tor). Now building toward a **beta**: metered settlement (close the prepay gap), reputation +
+spot-check verification, the moderation seam (CSAM image-hash + allowlist), a real GUI client,
+and standing up real infra/hosts. Leftover Phase-1 ops items (mainnet LND, more hosts) carry
+in alongside.

@@ -24,12 +24,15 @@ Guiding rule: **get sats flowing through the smallest possible loop before scali
 **Ships**
 - ✅ Swap `MockLightning` → **LND** with real L402 (REST, via httpx). Dedicated node — **not** AUPA's. *(Done: regtest payment verified end-to-end — dave-host invoice SETTLED `amt_paid_msat=64000`, alice-client payment SUCCEEDED, 0 fee.)*
 - ✅ Swap `MockModel` → **Ollama** serving `qwen3:14b` on the RTX 3060.
-- ☐ Swap local registry → **real Nostr** relay publish/discover; reach hosts over **Tor**. *(next seam)*
+- ✅ Swap local registry → **real Nostr** relay publish/discover (`REGISTRY=nostr`: signed kind-38111 listings, client verifies signatures, dedupes by pubkey).
+- ✅ Reach hosts over **Tor** (`TRANSPORT=tor`: host exposes a v3 `.onion`, advertises it in the listing, persists the onion key; client routes `.onion` endpoints over Tor's SOCKS proxy). *(Verified cross-network: client on **Starlink** reached the home host through a **public Nostr relay + Tor** — host IP hidden, no port-forwarding/NAT traversal.)*
 - ☐ CSAM image-output hash-check hook live on any image models.
 - ☐ Mainnet: point `LND_*` env vars at a real node (no code change).
 - ☐ Run 1–3 of your own GPU hosts.
 
-**Exit criteria:** a prompt from the client runs on your real host, settles real (or regtest) sats per token, and the listing is discoverable over Nostr.
+**Status:** Phase 1's **core code is complete and verified** — LND/L402 payments, Ollama inference, Nostr discovery, and Tor transport all run end-to-end (mock/local paths preserved behind env switches). Remaining Phase 1 items are operational, not core-protocol: **mainnet LND** (config-only), the **CSAM image-hash hook** (gates image models), and **running more hosts**.
+
+**Exit criteria:** ✅ met for the text path — a prompt from the client runs on the real host, settles regtest sats per token, and the listing is discoverable over Nostr (and reachable over Tor from any network).
 
 > **Known refinement — metered settlement (prepay gap).** Current model invoices the full
 > `max_tokens × price` upfront and settles it regardless of how many tokens are actually
