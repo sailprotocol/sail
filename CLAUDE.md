@@ -19,7 +19,7 @@ client, relays). See `ROADMAP.md` for phases.
 ## The four swappable seams (mocked → real)
 - `host/payments.py`: `MockLightning` → `LndLightning` (regtest → mainnet)
 - `host/model.py`: `MockModel` → `OllamaModel`/vLLM  *(Ollama already wired: `qwen3:14b` on local RTX 3060)*
-- `shared/registry.py`: local dir → Nostr relays *(`REGISTRY=nostr` done; Tor next)*
+- `shared/registry.py`: local dir → Nostr relays *(`REGISTRY=nostr` done)*; reach hosts over Tor via `TRANSPORT=tor` (`host/transport.py`)
 - `host/moderation.py`: stubs → real CSAM image-hash matching + governance allowlist
 
 ## Repo layout
@@ -41,6 +41,7 @@ client, relays). See `ROADMAP.md` for phases.
   - `LND_REST_HOST`, `LND_TLS_CERT_PATH`, `LND_MACAROON_PATH` — this process's own LND node
   - `MODEL` = `mock` | `ollama`; `OLLAMA_MODEL`, `OLLAMA_URL`
   - `REGISTRY` = `local` | `nostr`; `NOSTR_RELAYS` (comma-separated), `NOSTR_HOST_NSEC` (host only, never commit)
+  - `TRANSPORT` = `clearnet` | `tor`; `TOR_CONTROL_PORT`, `ONION_KEY_PATH` (host, key never commit), `TOR_SOCKS` (client)
   - `PORT`, `HOST_ENDPOINT`, `PRICE_MSAT_PER_TOKEN`
 
 ## Run & test

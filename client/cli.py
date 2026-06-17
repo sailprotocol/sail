@@ -30,7 +30,16 @@ def pick_host():
     return h
 
 
-def pay_invoice(endpoint: str, ch: dict) -> str:
+def _proxy_for(endpoint: str) -> str | None:
+    """Route .onion endpoints through Tor's SOCKS proxy; everything else connects directly.
+    socks5h:// resolves the hostname (incl. .onion) via the proxy, as Tor requires."""
+    host = httpx.URL(endpoint).host
+    if host.endswith(".onion"):
+        return os.getenv("TOR_SOCKS", "socks5h://127.0.0.1:9050")
+    return None
+
+
+def pay_invoice(endpoint: str, ch: dict, proxy: str | None = None) -> str:
     """Obtain the preimage for the challenge by paying.
 
     PAYMENTS=mock: ask the host's /mock/pay shim to settle and reveal it (Phase 0).
@@ -38,8 +47,9 @@ def pay_invoice(endpoint: str, ch: dict) -> str:
                    paying reveals the preimage.
     """
     if os.getenv("PAYMENTS", "mock").lower() == "lnd":
-        return lnd_pay(ch["invoice"])
-    r = httpx.post(f"{endpoint}/mock/pay", json={"payment_hash": ch["payment_hash"]})
+        return lnd_pay(ch["invoice"])  # talks to the client's own local LND, never via Tor
+    # mock /mock/pay hits the host endpoint, so it shares the host's proxy routing.
+    r = httpx.post(f"{endpoint}/mock/pay", json={"payment_hash": ch["payment_hash"]}, proxy=proxy)
     r.raise_for_status()
     return r.json()["preimage"]
 
@@ -82,9 +92,12 @@ def main() -> None:
     prompt = " ".join(sys.argv[1:]) or "Say hello from the network."
     host = pick_host()
     ep = host.endpoint
+    proxy = _proxy_for(ep)  # Tor SOCKS for .onion hosts, else direct
+    if proxy:
+        print(f"[client] .onion host -> routing over Tor ({proxy})")
 
     # 1) request inference, expect a 402 challenge
-    r = httpx.post(f"{ep}/v1/inference", json={"prompt": prompt, "max_tokens": 64})
+    r = httpx.post(f"{ep}/v1/inference", json={"prompt": prompt, "max_tokens": 64}, proxy=proxy)
     if r.status_code != 402:
         sys.exit(f"expected 402, got {r.status_code}: {r.text}")
     ch = r.json()
@@ -92,7 +105,7 @@ def main() -> None:
           f"({ch['amount_msat'] / 1000:.0f} sat). paying...")
 
     # 2) pay -> obtain preimage
-    preimage = pay_invoice(ep, ch)
+    preimage = pay_invoice(ep, ch, proxy)
 
     # 3) retry with L402 auth, stream the response
     auth = f"L402 {ch['macaroon']}:{preimage}"
@@ -100,7 +113,7 @@ def main() -> None:
     spent_msat = 0
     with httpx.stream("POST", f"{ep}/v1/inference",
                       json={"prompt": prompt, "max_tokens": 64},
-                      headers={"Authorization": auth}) as s:
+                      headers={"Authorization": auth}, proxy=proxy) as s:
         for chunk in s.iter_text():
             if "__SPENT_MSAT__:" in chunk:
                 text, _, meta = chunk.partition("__SPENT_MSAT__:")

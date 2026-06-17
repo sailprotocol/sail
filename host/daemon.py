@@ -29,6 +29,7 @@ from shared import registry
 from host import model as model_mod
 from host import payments as pay_mod
 from host import moderation
+from host import transport
 
 app = FastAPI(title="inference-net host")
 
@@ -39,6 +40,7 @@ PUBKEY = registry.host_identity() or os.getenv("HOST_PUBKEY", "host_" + secrets.
 PORT = int(os.getenv("PORT", "8001"))
 ENDPOINT = os.getenv("HOST_ENDPOINT", f"http://127.0.0.1:{PORT}")
 PRICE_MSAT_PER_TOKEN = int(os.getenv("PRICE_MSAT_PER_TOKEN", "1000"))  # 1 sat/token (demo)
+TRANSPORT = os.getenv("TRANSPORT", "clearnet").lower()  # clearnet | tor
 
 _model = model_mod.get_backend()
 _ln = pay_mod.get_backend()
@@ -49,6 +51,11 @@ _pending: dict[str, tuple[str, int]] = {}
 
 @app.on_event("startup")
 def publish_listing() -> None:
+    global ENDPOINT
+    if TRANSPORT == "tor":
+        # Expose the daemon as a .onion and advertise THAT as the endpoint.
+        ENDPOINT = transport.setup_onion(PORT)
+        print(f"[host] tor onion endpoint: {ENDPOINT}")
     listing = HostListing(
         pubkey=PUBKEY,
         endpoint=ENDPOINT,

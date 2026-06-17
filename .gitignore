@@ -5,3 +5,6 @@ registry/
 .env
 .env*
 !.env.example
+# Tor onion service private key — secret, never commit.
+*.key
+onion.key
