@@ -22,9 +22,12 @@ from shared.config import load_env
 
 load_env()  # same dotenv flow as the host daemon; reuses .env.client
 
+import os
+
 from client import core
 from client import reputation
 from client import history
+from client import wallet
 
 app = FastAPI(title="inference-net client")
 _STATIC = pathlib.Path(__file__).parent / "static"
@@ -142,3 +145,34 @@ def api_history_delete(sid: str):
 @app.delete("/api/history")
 def api_history_clear():
     return {"cleared": history.clear()}
+
+
+# --- wallet (NWC) -----------------------------------------------------------
+def _wallet_status() -> dict:
+    s = wallet.status()
+    s["payments"] = os.getenv("PAYMENTS", "mock").lower()
+    return s  # never includes the NWC secret
+
+
+class WalletConnect(BaseModel):
+    uri: str
+
+
+@app.get("/api/wallet")
+def api_wallet_status():
+    return _wallet_status()
+
+
+@app.post("/api/wallet")
+def api_wallet_connect(req: WalletConnect):
+    try:
+        wallet.save(req.uri)  # validates the NWC string format
+    except Exception as e:
+        return JSONResponse({"error": f"invalid NWC connection string: {e}"}, status_code=400)
+    return _wallet_status()
+
+
+@app.delete("/api/wallet")
+def api_wallet_disconnect():
+    wallet.clear()
+    return _wallet_status()

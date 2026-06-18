@@ -37,8 +37,9 @@ client, relays). See `ROADMAP.md` for phases.
 - Two filled, gitignored files for dev — one per Polar node: the host process uses
   `ENV_FILE=.env.host`, the client uses `ENV_FILE=.env.client`. Template: `.env.example` (committed).
 - Standardized variable names:
-  - `PAYMENTS` = `mock` | `lnd`
-  - `LND_REST_HOST`, `LND_TLS_CERT_PATH`, `LND_MACAROON_PATH` — this process's own LND node
+  - `PAYMENTS` = `mock` | `lnd` | `nwc`
+  - `LND_REST_HOST`, `LND_TLS_CERT_PATH`, `LND_MACAROON_PATH` — this process's own LND node (`PAYMENTS=lnd`)
+  - `NWC_URI` (client NWC connection string, secret) / `NWC_PATH` (GUI store, gitignored) — `PAYMENTS=nwc`, non-custodial
   - `MODEL` = `mock` | `ollama`; `OLLAMA_MODEL`, `OLLAMA_URL`
   - `REGISTRY` = `local` | `nostr`; `NOSTR_RELAYS` (comma-separated), `NOSTR_HOST_NSEC` (host only, never commit)
   - `TRANSPORT` = `clearnet` | `tor`; `TOR_CONTROL_PORT`, `ONION_KEY_PATH` (host, key never commit), `TOR_SOCKS` (client)

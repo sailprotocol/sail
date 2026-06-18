@@ -20,6 +20,7 @@ from shared import registry
 from shared.l402 import NEXT_MARKER, DONE_MARKER
 from host import moderation
 from client import reputation
+from client import wallet
 
 
 def discover_hosts() -> list:
@@ -63,11 +64,43 @@ def lnd_pay(invoice: str) -> str:
     raise RuntimeError("payment stream ended without a SUCCEEDED result")
 
 
+def _run_async(coro_factory):
+    """Run an async coroutine to completion in a dedicated thread with its own event loop, so
+    these calls work from the sync CLI and from FastAPI's threadpool generator alike."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(lambda: asyncio.run(coro_factory())).result()
+
+
+_nwc = None  # cached Nwc client, so the wallet relay connection is reused across chunks
+
+
+def nwc_pay(invoice: str) -> str:
+    """Pay a BOLT11 invoice from the user's OWN wallet over NWC (NIP-47) -> preimage hex.
+    Non-custodial: this only relays a pay_invoice request to the user's wallet."""
+    global _nwc
+    uri = wallet.load_uri()
+    if not uri:
+        raise RuntimeError("no wallet connected — connect one in the GUI or set NWC_URI")
+    from nostr_sdk import Nwc, NostrWalletConnectUri, PayInvoiceRequest
+    if _nwc is None:
+        _nwc = Nwc(NostrWalletConnectUri.parse(uri))
+
+    async def _go():
+        return await _nwc.pay_invoice(PayInvoiceRequest(id=None, invoice=invoice, amount=None))
+
+    return _run_async(_go).preimage
+
+
 def pay_invoice(endpoint: str, ch: dict, proxy: str | None = None) -> str:
-    """Obtain the preimage for a chunk challenge by paying.
-    PAYMENTS=mock -> ask the host's /mock/pay shim; PAYMENTS=lnd -> pay via the client's LND."""
-    if os.getenv("PAYMENTS", "mock").lower() == "lnd":
-        return lnd_pay(ch["invoice"])  # client's own local LND, never via Tor
+    """Obtain the preimage for a chunk challenge by paying. PAYMENTS=mock -> host /mock/pay shim;
+    lnd -> the client's own LND node; nwc -> the user's own wallet via NWC (NIP-47)."""
+    mode = os.getenv("PAYMENTS", "mock").lower()
+    if mode == "lnd":
+        return lnd_pay(ch["invoice"])      # client's own local LND, never via Tor
+    if mode == "nwc":
+        return nwc_pay(ch["invoice"])      # user's own wallet over NWC, never via Tor
     r = httpx.post(f"{endpoint}/mock/pay", json={"payment_hash": ch["payment_hash"]}, proxy=proxy)
     r.raise_for_status()
     return r.json()["preimage"]
