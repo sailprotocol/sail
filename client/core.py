@@ -125,7 +125,9 @@ def run_inference(host, prompt: str, max_tokens: int = 64) -> Iterator[dict]:
         ok = True
         latency_ms = (time.monotonic() - t0) * 1000
         yield {"type": "done", "spent_msat": spent_msat, "latency_ms": round(latency_ms, 1)}
-    except Exception as e:  # noqa: BLE001 - surface any failure as an event
-        yield {"type": "error", "message": str(e)}
+    except httpx.TransportError as e:  # connect refused / Tor-unreachable / timeout / network drop
+        yield {"type": "error", "kind": "unreachable", "message": str(e)}
+    except Exception as e:  # noqa: BLE001 - surface any other failure as an event
+        yield {"type": "error", "kind": "other", "message": str(e)}
     finally:
         reputation.record(host.pubkey, success=ok, latency_ms=(latency_ms if ok else None))

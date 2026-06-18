@@ -2,8 +2,9 @@
 Local web client (GUI v1).
 
 A small FastAPI backend that wraps the shared client core (`client/core.py`) and serves a
-browser UI on localhost, so non-CLI users can discover hosts, pick one, prompt, watch tokens
-stream, and see sats spent. v1 is a local web app; Tauri/desktop packaging is deferred.
+browser UI on localhost. Adds session history (persisted locally), host-unreachable handling
+with auto-failover to the next-ranked host, and markdown rendering (frontend). v1 is a local
+web app; Tauri/desktop packaging is deferred.
 
     ENV_FILE=.env.client PYTHONPATH=. .venv/bin/uvicorn client.webapp:app --port 8080
     # then open http://127.0.0.1:8080
@@ -13,8 +14,9 @@ from __future__ import annotations
 import json
 import pathlib
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from pydantic import BaseModel
 
 from shared.config import load_env
 
@@ -22,10 +24,10 @@ load_env()  # same dotenv flow as the host daemon; reuses .env.client
 
 from client import core
 from client import reputation
+from client import history
 
 app = FastAPI(title="inference-net client")
 _STATIC = pathlib.Path(__file__).parent / "static"
-_host_cache: dict = {}  # pubkey -> HostListing, populated by /api/hosts for /api/infer lookup
 
 
 @app.get("/")
@@ -37,10 +39,8 @@ def index():
 def api_hosts():
     hosts = core.discover_hosts()
     rep = reputation.load()
-    _host_cache.clear()
     out = []
     for h in hosts:
-        _host_cache[h.pubkey] = h
         m = h.models[0]
         s = rep.get(h.pubkey)
         rep_view = None
@@ -63,23 +63,82 @@ def api_hosts():
     return {"hosts": out}
 
 
-@app.post("/api/infer")
-async def api_infer(request: Request):
-    body = await request.json()
-    pubkey = body.get("host_pubkey")
-    prompt = body.get("prompt", "")
-    max_tokens = int(body.get("max_tokens", 64))
+class InferRequest(BaseModel):
+    host_pubkey: str
+    prompt: str
+    max_tokens: int = 64
 
-    host = _host_cache.get(pubkey)
-    if host is None:  # cache miss (e.g. server restarted) -> re-discover
-        host = next((h for h in core.discover_hosts() if h.pubkey == pubkey), None)
-    if host is None:
-        return JSONResponse({"error": "unknown host_pubkey"}, status_code=404)
 
-    def gen():
-        # NDJSON: one core event per line. Sync generator -> FastAPI runs it in a threadpool,
-        # so the blocking httpx/payment calls don't block the event loop.
+def _infer_stream(start_pubkey: str, prompt: str, max_tokens: int):
+    """Stream core events as NDJSON, auto-failing-over to the next-ranked host when a host is
+    unreachable before any token arrives, and saving a history entry on completion."""
+    ranked = core.discover_hosts()  # PoW-filtered, allowlisted, reputation-ranked
+    chosen = next((h for h in ranked if h.pubkey == start_pubkey), None)
+    order = ([chosen] if chosen else []) + [h for h in ranked if h.pubkey != start_pubkey]
+    if not order:
+        yield json.dumps({"type": "error", "kind": "unreachable",
+                          "message": "no hosts available"}) + "\n"
+        return
+
+    for i, host in enumerate(order):
+        if i > 0:  # we moved here because an earlier host was unreachable
+            yield json.dumps({"type": "failover", "to_pubkey": host.pubkey,
+                              "model": host.models[0].name}) + "\n"
+        emitted = 0
+        buf: list[str] = []
+        advanced = False
         for ev in core.run_inference(host, prompt, max_tokens=max_tokens):
-            yield json.dumps(ev) + "\n"
+            if ev["type"] == "token":
+                emitted += 1
+                buf.append(ev["text"])
+                yield json.dumps(ev) + "\n"
+            elif ev["type"] == "done":
+                try:
+                    history.save(host_pubkey=host.pubkey, model=host.models[0].name,
+                                 prompt=prompt, response="".join(buf),
+                                 spent_msat=ev["spent_msat"], latency_ms=ev["latency_ms"])
+                except Exception:
+                    pass  # history is best-effort; never break the response on a write error
+                yield json.dumps(ev) + "\n"
+                return
+            elif ev["type"] == "error":
+                # Clean failover only: unreachable, nothing streamed yet, another host remains.
+                if ev.get("kind") == "unreachable" and emitted == 0 and i < len(order) - 1:
+                    advanced = True
+                    break
+                yield json.dumps(ev) + "\n"
+                return
+        if not advanced:
+            return
+    yield json.dumps({"type": "error", "kind": "unreachable",
+                      "message": "all candidate hosts were unreachable"}) + "\n"
 
-    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+@app.post("/api/infer")
+def api_infer(req: InferRequest):
+    return StreamingResponse(
+        _infer_stream(req.host_pubkey, req.prompt, req.max_tokens),
+        media_type="application/x-ndjson",
+    )
+
+
+# --- session history --------------------------------------------------------
+@app.get("/api/history")
+def api_history():
+    return {"sessions": history.list_summaries()}
+
+
+@app.get("/api/history/{sid}")
+def api_history_one(sid: str):
+    s = history.get(sid)
+    return s if s else JSONResponse({"error": "not found"}, status_code=404)
+
+
+@app.delete("/api/history/{sid}")
+def api_history_delete(sid: str):
+    return {"deleted": history.delete(sid)}
+
+
+@app.delete("/api/history")
+def api_history_clear():
+    return {"cleared": history.clear()}

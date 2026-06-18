@@ -10,3 +10,5 @@ registry/
 onion.key
 # Client-side reputation (local first-party experience) — machine-specific, not committed.
 client_reputation.json
+# Client session history (local) — machine-specific, not committed.
+client_history.json

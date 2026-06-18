@@ -37,6 +37,9 @@ def main() -> None:
             print(f"\n\n[client] done. spent {ev['spent_msat']} msat "
                   f"(~{ev['spent_msat'] / 1000:.0f} sat) in {ev['latency_ms'] / 1000:.1f}s.")
         elif ev["type"] == "error":
+            if ev.get("kind") == "unreachable":
+                sys.exit(f"\n[client] host unreachable — try another host or check the network "
+                         f"({ev['message']})")
             sys.exit(f"\n[client] error: {ev['message']}")
 
 

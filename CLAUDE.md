@@ -44,6 +44,7 @@ client, relays). See `ROADMAP.md` for phases.
   - `TRANSPORT` = `clearnet` | `tor`; `TOR_CONTROL_PORT`, `ONION_KEY_PATH` (host, key never commit), `TOR_SOCKS` (client)
   - `POW_TARGET` (host, NIP-13 listing PoW bits), `POW_MIN_DIFFICULTY` (client rejects below), `REPUTATION_PATH` (client, gitignored)
   - `MODEL_ALLOWLIST` / `MODEL_ALLOWLIST_PATH` (host refuses to serve + client filters; unset = permissive), `CSAM_HASHER` (image gate; unset = image disabled, fail-closed)
+  - `REPUTATION_PATH`, `HISTORY_PATH` (client GUI local stores; both gitignored)
   - `PORT`, `HOST_ENDPOINT`, `PRICE_MSAT_PER_TOKEN`, `CHUNK_TOKENS` (metered-settlement chunk size)
 
 ## Run & test
