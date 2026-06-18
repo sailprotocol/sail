@@ -11,15 +11,29 @@ payment mode) comes from env vars the shell injects, pointing at the app-data di
 Importing `app` directly (not the "client.webapp:app" import string) lets PyInstaller's static
 analysis follow the dependency graph into client/* and nostr_sdk.
 """
+import os
 import sys
+import threading
+import time
 
 import uvicorn
 
 from client.webapp import app
 
 
+def _exit_when_orphaned() -> None:
+    """Belt-and-suspenders: if the parent (the Tauri shell) dies, getppid() changes (we get
+    reparented), so exit instead of lingering as an orphaned server."""
+    parent = os.getppid()
+    while True:
+        time.sleep(1.0)
+        if os.getppid() != parent:
+            os._exit(0)
+
+
 def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+    threading.Thread(target=_exit_when_orphaned, daemon=True).start()
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
 
 

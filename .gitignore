@@ -19,3 +19,7 @@ desktop/sidecar/build/
 desktop/sidecar/dist/
 desktop/src-tauri/target/
 desktop/src-tauri/binaries/
+desktop/src-tauri/gen/
+desktop/src-tauri/resources/
+desktop/src-tauri/icons/
+desktop/icon-src.png
