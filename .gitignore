@@ -14,3 +14,8 @@ client_reputation.json
 client_history.json
 # NWC wallet connection string (secret — can spend) — never commit.
 client_nwc.json
+# Desktop (Tauri) build artifacts — generated, not committed.
+desktop/sidecar/build/
+desktop/sidecar/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/binaries/
