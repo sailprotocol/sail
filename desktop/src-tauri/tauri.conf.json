@@ -17,7 +17,8 @@
     "targets": ["deb", "appimage"],
     "icon": ["icons/icon.png"],
     "resources": {
-      "resources/server": "server"
+      "resources/server": "server",
+      "resources/tor": "tor"
     },
     "linux": {
       "deb": {
