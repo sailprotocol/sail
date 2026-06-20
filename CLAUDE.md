@@ -1,4 +1,4 @@
-# CLAUDE.md — inference-net
+# CLAUDE.md — SAIL (Sovereign AI Inference Layer)
 
 ## What this is
 A decentralized, censorship-resistant, Lightning-native AI **inference network** plus a

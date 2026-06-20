@@ -35,7 +35,7 @@ from host import payments as pay_mod
 from host import moderation
 from host import transport
 
-app = FastAPI(title="inference-net host")
+app = FastAPI(title="SAIL host")
 
 # --- host identity & config -------------------------------------------------
 # With REGISTRY=nostr the listing identity IS the host's Nostr pubkey; otherwise (local)

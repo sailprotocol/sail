@@ -1,4 +1,4 @@
-# inference-net desktop app (Tauri)
+# SAIL desktop app (Tauri)
 
 A standalone desktop client (Bisq-style): one app that runs the existing Python client
 (`client.webapp`) as a bundled sidecar and loads its UI in a native webview. No Python, no

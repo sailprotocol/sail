@@ -1,4 +1,4 @@
-// inference-net desktop shell.
+// SAIL (Sovereign AI Inference Layer) desktop shell.
 //
 // Launches the bundled Python client (client.webapp via the PyInstaller --onedir "server"
 // binary) as a child process, waits for it to come up on a free localhost port, then opens a
@@ -121,7 +121,7 @@ fn main() {
                             "main",
                             WebviewUrl::External(url.parse().unwrap()),
                         )
-                        .title("inference-net")
+                        .title("SAIL")
                         .inner_size(1120.0, 780.0)
                         .build()
                         {

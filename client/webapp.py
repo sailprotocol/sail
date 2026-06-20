@@ -29,7 +29,7 @@ from client import reputation
 from client import history
 from client import wallet
 
-app = FastAPI(title="inference-net client")
+app = FastAPI(title="SAIL client")
 _STATIC = pathlib.Path(__file__).parent / "static"
 
 

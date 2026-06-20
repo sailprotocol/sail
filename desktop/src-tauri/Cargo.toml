@@ -1,7 +1,7 @@
 [package]
-name = "inference-net-desktop"
+name = "sail-desktop"
 version = "0.1.0"
-description = "inference-net desktop client"
+description = "SAIL — Sovereign AI Inference Layer desktop client"
 edition = "2021"
 
 [build-dependencies]

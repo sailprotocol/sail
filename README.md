@@ -1,6 +1,6 @@
-# inference-net — Phase 0 scaffold
+# SAIL — Sovereign AI Inference Layer
 
-A working **proof-of-loop** for the decentralized inference network: a client discovers a
+A working **proof-of-loop** for SAIL (Sovereign AI Inference Layer): a client discovers a
 host, pays per output token over an **L402** Lightning handshake, and streams the response
 while metering sats. Every hard integration (Lightning, model, discovery) sits behind a
 clean interface that is mocked in Phase 0 and swapped for the real thing in Phase 1.

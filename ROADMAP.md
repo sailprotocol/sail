@@ -1,4 +1,4 @@
-# Roadmap — Decentralized Inference Network
+# Roadmap — SAIL (Sovereign AI Inference Layer)
 
 Open-core strategy: the **protocol + reference client stay open** (decentralization + moat); **revenue comes from supply you run + paid services** (verified-host program, premium client, relays). See the v1 spec for the full rationale.
 
