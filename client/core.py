@@ -114,7 +114,11 @@ def run_inference(host, prompt: str, max_tokens: int = 64) -> Iterator[dict]:
     """
     ep = host.endpoint
     proxy = proxy_for(ep)
-    stream_timeout = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
+    # httpx's read timeout is the max gap between successive network reads — it RESETS each time
+    # bytes arrive, so a slow-but-steady stream never trips it; the budget just has to cover a
+    # cold first token + a Tor/payment round-trip. qwen3:14b on a 3060 over Tor is ~0.6 tok/s.
+    read_to = float(os.getenv("CLIENT_READ_TIMEOUT", "300"))
+    stream_timeout = httpx.Timeout(connect=15.0, read=read_to, write=15.0, pool=15.0)
     t0 = time.monotonic()
     ok = False
     spent_msat = 0

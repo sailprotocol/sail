@@ -43,7 +43,13 @@ class OllamaModel(ModelBackend):
         import httpx
 
         url = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/generate"
-        with httpx.stream("POST", url, json={"model": self.name, "prompt": prompt}) as r:
+        # keep_alive pins the model in VRAM so it doesn't cold-load per request (cold loads are
+        # the main cause of the first chunk blowing past timeouts). Generous read timeout covers
+        # a cold first token if it does happen.
+        payload = {"model": self.name, "prompt": prompt,
+                   "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "30m")}
+        timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
+        with httpx.stream("POST", url, json=payload, timeout=timeout) as r:
             for line in r.iter_lines():
                 if not line:
                     continue
