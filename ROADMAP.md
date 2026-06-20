@@ -96,6 +96,11 @@ Follow-ups for the web client (`client/webapp.py` + `client/static/`, shared log
 - **Session history.** Persist past inference sessions locally (prompt, response, host pubkey,
   sats spent, timestamp); let the GUI list previous sessions and reopen them. Gitignored, like
   the reputation store.
+- **Payment transparency & pre-pay confirmation.** *(trust-critical beta-hardening)* Before
+  paying, show the host + price/token + **max cost** (`price × max_tokens`) with an explicit
+  confirm step — no silent spend. During streaming, show **running sats spent live** as chunks
+  settle. Replace the bare "paying…" state with **"paying N sats to `<model>`"** so the user
+  always knows who they're paying and how much.
 
 ---
 
