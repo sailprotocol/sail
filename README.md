@@ -1,65 +1,71 @@
 # SAIL — Sovereign AI Inference Layer
 
-A working **proof-of-loop** for SAIL (Sovereign AI Inference Layer): a client discovers a
-host, pays per output token over an **L402** Lightning handshake, and streams the response
-while metering sats. Every hard integration (Lightning, model, discovery) sits behind a
-clean interface that is mocked in Phase 0 and swapped for the real thing in Phase 1.
+**Pay-per-token AI inference over Lightning. Non-custodial, open, censorship-resistant.**
 
-See `ROADMAP.md` for the phases and the v1 spec for the open-core revenue strategy.
+SAIL is a decentralized network where anyone can run an AI model behind a Lightning paywall and
+anyone can use it — discover a host, send a prompt, pay per output token, stream the response. No
+accounts, no API keys, no middleman holding your funds or your data.
 
-## What works right now
+🌐 [sailprotocol.com](https://sailprotocol.com)
 
-`discover → 402 challenge → pay → L402 retry → metered token stream`, end to end, with
-real preimage/hash crypto on the payment handshake. No GPU, no Lightning node, no network.
+---
 
-```
-pip install -r requirements.txt
-PYTHONPATH=. python3 smoke_test.py        # in-process, validates the whole loop
-```
+## Why SAIL
 
-Or run it as two real processes:
+- **Non-custodial.** You pay host invoices straight from your own Lightning wallet. The app never
+  holds your funds.
+- **Open-core.** The protocol and reference client are open (MIT) and forkable — that's the moat and
+  the decentralization. Run your own host or client; nobody can lock you out.
+- **Censorship-resistant.** Hosts are discovered over **Nostr** and reachable over **Tor**
+  (`.onion`), so there's no central endpoint to block, and a host's IP stays hidden.
+- **Pay for what you use.** Metered per output token over **L402**; with an NWC wallet you pay
+  per-chunk as it streams.
 
-```
-# terminal 1 — host
-PYTHONPATH=. PAYMENTS=mock MODEL=mock PORT=8001 uvicorn host.daemon:app --port 8001
+## Install (Linux beta)
 
-# terminal 2 — client
-PYTHONPATH=. python3 -m client.cli "Explain Lightning in one sentence"
-```
+Grab the latest build from [**Releases**](https://github.com/sailprotocol/sail/releases/latest):
 
-## Layout
+- **AppImage** (portable, no install):
+  ```bash
+  wget https://github.com/sailprotocol/sail/releases/latest/download/SAIL-x86_64.AppImage
+  chmod +x SAIL-x86_64.AppImage
+  ./SAIL-x86_64.AppImage
+  ```
+- **Debian/Ubuntu** (`.deb`): download `SAIL_*_amd64.deb` from the release and
+  `sudo apt install ./SAIL_*_amd64.deb`.
 
-```
-shared/
-  listing.py     # Nostr host-listing schema (real shape; local transport for now)
-  l402.py        # L402 challenge / parse / verify (real sha256 preimage check)
-  registry.py    # discovery: local ./registry dir now -> Nostr relays in Phase 1
-host/
-  daemon.py      # FastAPI: L402-gated, metered, streaming inference + listing publish
-  payments.py    # LightningBackend: MockLightning (works) | LndLightning (Phase 1 stub)
-  model.py       # ModelBackend:   MockModel (works) | OllamaModel (Phase 1)
-  moderation.py  # CSAM image-hash hook + allowlist seam (the hard line)
-client/
-  cli.py         # discover, pay (mock reveal), stream, tally sats
-smoke_test.py    # in-process end-to-end check
-```
+The app bundles everything (Python runtime, Tor) — you don't need Python or a Lightning node
+installed to use it as a client.
 
-## Mocked now → real in Phase 1 (the seams)
+## Connect a wallet
 
-| Interface | Phase 0 | Phase 1 |
-|---|---|---|
-| `host/payments.py` | `MockLightning` reveals preimage locally | `LndLightning` against a **dedicated** LND node (regtest→mainnet) + real L402 |
-| `host/model.py` | `MockModel` echoes tokens | `OllamaModel` / vLLM serving a real open model |
-| `shared/registry.py` | local `./registry/*.json` | Nostr relay publish/subscribe over Tor |
-| `host/moderation.py` | no-op stubs | perceptual-hash CSAM matching on image outputs; governance allowlist |
-| payment per request | one macaroon per request | streaming/renewing macaroons, spend caps in caveats |
+Open SAIL, pick a host, type a prompt, hit **Send**, and pay. Two ways to pay:
 
-## Important notes
+- **NWC (automatic, recommended).** Paste a [Nostr Wallet Connect](https://nwc.dev) string from a
+  supporting wallet (Alby, Zeus, Coinos, Primal…). SAIL pays each chunk automatically as the
+  response streams.
+- **BOLT11 (any wallet).** No NWC? SAIL shows a single **QR + copyable invoice** for the request —
+  pay it from **any** Lightning wallet (Strike, BlueWallet, Phoenix, Cash App…). Once it settles,
+  the response streams.
 
-- **`/mock/pay` is Phase-0 only.** It simulates the LN network revealing the preimage to
-  the payer. It is disabled when `PAYMENTS=lnd`; a real payer learns the preimage by paying.
-- **Use a dedicated Lightning node for Phase 1 — not the AUPA BTCPay node.** Keep this
-  venture's funds, keys, and entity fully separate.
-- Listings are replaceable by pubkey; the demo host uses a random pubkey per run, so
-  `rm -rf registry` between runs if stale entries accumulate.
-- Pricing in the demo is 1 sat/token for legibility; real pricing is set per host listing.
+Either way, the payment goes from your wallet directly to the host. SAIL never custodies funds.
+
+## Run a host
+
+Have a GPU? Serve a model and earn sats per token. Host setup (LND, Ollama/vLLM, Nostr publishing,
+Tor onion, pricing) is documented in the docs:
+
+📖 **[sailprotocol.com/docs](https://sailprotocol.com/docs/)**
+
+## Honest notes (please read)
+
+- **The host can see your prompt and response.** Inference runs on the host's hardware in plaintext
+  — this is **not** private/confidential inference. Don't send anything you wouldn't want the host
+  operator to read. (A TEE-backed private tier is on the roadmap, not here yet.)
+- **Beta software.** Expect rough edges. **Linux x86_64 only** for now (macOS/Windows later).
+- **Keep amounts small.** It's early; use small sats while the network and clients harden.
+- **You are responsible for your wallet and your spend.** Set a sensible max-tokens / wallet budget.
+
+## License
+
+MIT — see [LICENSE](LICENSE). © 2026 SAIL contributors.
