@@ -14,7 +14,7 @@ os.environ.setdefault("POW_MIN_DIFFICULTY", "8")  # client rejects listings belo
 os.environ.setdefault("MODEL_ALLOWLIST", "mock-echo:1b")  # enforce allowlist; mock is allowed
 
 from fastapi.testclient import TestClient
-from host.daemon import app, PRICE_MSAT_PER_TOKEN
+from host.daemon import app, PRICE_MSAT_PER_TOKEN, BOLT11_EXPIRY_SECONDS, _ln
 from shared import registry
 from shared.l402 import NEXT_MARKER, DONE_MARKER
 from shared import pow as powmod
@@ -113,6 +113,11 @@ def main() -> None:
         bt = c.post("/v1/inference/bolt11", json={"prompt": "hi from bolt11",
                                                   "max_tokens": max_tokens}).json()
         assert bt["amount_msat"] == max_tokens * PRICE_MSAT_PER_TOKEN, "bolt11 should invoice the ceiling"
+        # The invoice's OWN expiry must equal the session window — a wallet must not be able to pay
+        # after the host evicts the session (no service, no refund). create_invoice got this value.
+        assert _ln._invoice_expiry.get(bt["payment_hash"]) == BOLT11_EXPIRY_SECONDS, \
+            f"invoice expiry must match BOLT11_EXPIRY_SECONDS ({BOLT11_EXPIRY_SECONDS}), " \
+            f"got {_ln._invoice_expiry.get(bt['payment_hash'])}"
         assert c.get(f"/v1/inference/bolt11/{bt['session_id']}/status").json()["state"] == "waiting"
         # serving before settlement is refused
         assert c.post(f"/v1/inference/bolt11/{bt['session_id']}/stream").status_code == 402

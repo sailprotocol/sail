@@ -228,7 +228,9 @@ async def bolt11_create(request: Request):
                 if time.time() - v["created"] > BOLT11_EXPIRY_SECONDS and not v.get("served")]:
         _bolt11.pop(sid, None)
     amount_msat = max_tokens * PRICE_MSAT_PER_TOKEN  # the ceiling — coarse, no refund (v1)
-    bolt11, payment_hash = _ln.create_invoice(amount_msat)
+    # The invoice's OWN expiry must match the session window, so a wallet can't pay it after the
+    # host has evicted the session (which would take funds with no service).
+    bolt11, payment_hash = _ln.create_invoice(amount_msat, expiry_seconds=BOLT11_EXPIRY_SECONDS)
     sid = secrets.token_hex(16)
     _bolt11[sid] = {"prompt": prompt, "max_tokens": max_tokens, "payment_hash": payment_hash,
                     "amount_msat": amount_msat, "created": time.time(), "served": False}

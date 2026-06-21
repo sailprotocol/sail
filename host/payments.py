@@ -19,8 +19,9 @@ from shared.l402 import sha256_hex
 
 
 class LightningBackend:
-    def create_invoice(self, amount_msat: int) -> tuple[str, str]:
-        """Return (bolt11, payment_hash_hex)."""
+    def create_invoice(self, amount_msat: int, expiry_seconds: int | None = None) -> tuple[str, str]:
+        """Return (bolt11, payment_hash_hex). `expiry_seconds` sets the invoice's OWN expiry so a
+        wallet cannot pay it after the host has stopped honoring it (BOLT11 fallback). None = node default."""
         raise NotImplementedError
 
     def reveal_preimage(self, payment_hash_hex: str) -> str | None:
@@ -43,11 +44,13 @@ class MockLightning(LightningBackend):
     def __init__(self) -> None:
         self._hash_to_preimage: dict[str, str] = {}
         self._settled: set[str] = set()
+        self._invoice_expiry: dict[str, int | None] = {}  # records the expiry create_invoice got
 
-    def create_invoice(self, amount_msat: int) -> tuple[str, str]:
+    def create_invoice(self, amount_msat: int, expiry_seconds: int | None = None) -> tuple[str, str]:
         preimage = secrets.token_bytes(32)
         payment_hash = sha256_hex(preimage)
         self._hash_to_preimage[payment_hash] = preimage.hex()
+        self._invoice_expiry[payment_hash] = expiry_seconds
         bolt11 = f"lnbcMOCK{amount_msat}m{payment_hash[:12]}"
         return bolt11, payment_hash
 
@@ -85,8 +88,11 @@ class LndLightning(LightningBackend):
             timeout=10.0,
         )
 
-    def create_invoice(self, amount_msat: int) -> tuple[str, str]:
-        r = self._client.post("/v1/invoices", json={"value_msat": str(amount_msat)})
+    def create_invoice(self, amount_msat: int, expiry_seconds: int | None = None) -> tuple[str, str]:
+        body = {"value_msat": str(amount_msat)}
+        if expiry_seconds is not None:
+            body["expiry"] = str(expiry_seconds)  # LND addinvoice expiry (s); else node default
+        r = self._client.post("/v1/invoices", json=body)
         r.raise_for_status()
         data = r.json()
         # r_hash is base64-encoded bytes in LND's REST gateway; we want hex.
