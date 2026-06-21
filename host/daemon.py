@@ -47,6 +47,7 @@ PRICE_MSAT_PER_TOKEN = int(os.getenv("PRICE_MSAT_PER_TOKEN", "1000"))  # 1 sat/t
 TRANSPORT = os.getenv("TRANSPORT", "clearnet").lower()  # clearnet | tor
 CHUNK_TOKENS = max(1, int(os.getenv("CHUNK_TOKENS", "8")))  # metered settlement granularity
 SESSION_TTL = 300  # seconds; evict abandoned generation sessions
+BOLT11_EXPIRY_SECONDS = int(os.getenv("BOLT11_EXPIRY_SECONDS", "600"))  # manual-pay window
 
 _model = model_mod.get_backend()
 _ln = pay_mod.get_backend()
@@ -60,6 +61,11 @@ _pending: dict[str, tuple[str, str, int, int]] = {}
 # session_id -> live generation state for one streamed response
 _sessions: dict[str, dict] = {}
 _NOTHING = object()  # 1-token look-ahead sentinel (distinguishes "no buffered token")
+
+# Manual BOLT11 fallback: ONE invoice for the ceiling (max_tokens × price), paid from any wallet;
+# the host confirms settlement via its own LND and then streams. session_id is the bearer token.
+# sid -> {prompt, max_tokens, payment_hash, amount_msat, created, served}
+_bolt11: dict[str, dict] = {}
 
 
 def _evict_stale() -> None:
@@ -200,7 +206,84 @@ async def inference(request: Request, authorization: str | None = Header(default
     return StreamingResponse(chunk_stream(), media_type="text/plain")
 
 
+# --- Manual BOLT11 fallback (pay from any Lightning wallet) ------------------
+def _bolt11_state(s: dict) -> str:
+    if s.get("settled") or _ln.is_settled(s["payment_hash"]):
+        s["settled"] = True
+        return "settled"
+    if time.time() - s["created"] > BOLT11_EXPIRY_SECONDS:
+        return "expired"
+    return "waiting"
+
+
+@app.post("/v1/inference/bolt11")
+async def bolt11_create(request: Request):
+    body = await request.json()
+    prompt = body.get("prompt", "")
+    max_tokens = int(body.get("max_tokens", 64)) or 64
+    if not moderation.is_model_allowed(_model.name):
+        return JSONResponse({"error": "model not on network allowlist"}, status_code=451)
+    # Evict expired bolt11 sessions opportunistically.
+    for sid in [k for k, v in _bolt11.items()
+                if time.time() - v["created"] > BOLT11_EXPIRY_SECONDS and not v.get("served")]:
+        _bolt11.pop(sid, None)
+    amount_msat = max_tokens * PRICE_MSAT_PER_TOKEN  # the ceiling — coarse, no refund (v1)
+    bolt11, payment_hash = _ln.create_invoice(amount_msat)
+    sid = secrets.token_hex(16)
+    _bolt11[sid] = {"prompt": prompt, "max_tokens": max_tokens, "payment_hash": payment_hash,
+                    "amount_msat": amount_msat, "created": time.time(), "served": False}
+    return {"session_id": sid, "invoice": bolt11, "payment_hash": payment_hash,
+            "amount_msat": amount_msat, "expires_in": BOLT11_EXPIRY_SECONDS}
+
+
+@app.get("/v1/inference/bolt11/{sid}/status")
+def bolt11_status(sid: str):
+    s = _bolt11.get(sid)
+    if s is None:
+        return JSONResponse({"error": "unknown or expired session"}, status_code=404)
+    state = _bolt11_state(s)
+    if state == "expired":
+        _bolt11.pop(sid, None)
+    return {"state": state, "amount_msat": s["amount_msat"]}
+
+
+@app.post("/v1/inference/bolt11/{sid}/stream")
+def bolt11_stream(sid: str):
+    s = _bolt11.get(sid)
+    if s is None:
+        return JSONResponse({"error": "unknown or expired session"}, status_code=404)
+    state = _bolt11_state(s)
+    if state == "expired":
+        _bolt11.pop(sid, None)
+        return JSONResponse({"error": "invoice expired"}, status_code=410)
+    if state != "settled":
+        return JSONResponse({"error": "invoice not paid yet"}, status_code=402)
+    if s.get("served"):
+        return JSONResponse({"error": "session already served"}, status_code=409)
+    s["served"] = True
+
+    def token_stream():
+        for i, tok in enumerate(_model.stream(s["prompt"])):
+            if i >= s["max_tokens"]:
+                break
+            yield tok
+        _bolt11.pop(sid, None)
+        yield done_trailer(s["amount_msat"])  # manual prepay = the ceiling
+
+    return StreamingResponse(token_stream(), media_type="text/plain")
+
+
 # --- PHASE 0 ONLY -----------------------------------------------------------
+@app.post("/mock/settle")
+async def mock_settle(request: Request):
+    """Simulate a foreign wallet paying a BOLT11 invoice (so is_settled() flips). PAYMENTS=mock only."""
+    if os.getenv("PAYMENTS", "mock") != "mock":
+        return JSONResponse({"error": "mock settle disabled"}, status_code=404)
+    body = await request.json()
+    _ln.mark_settled(body["payment_hash"])
+    return {"settled": True}
+
+
 @app.post("/mock/pay")
 async def mock_pay(request: Request):
     """Simulate the LN network settling the invoice and revealing the preimage to the

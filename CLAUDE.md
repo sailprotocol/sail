@@ -46,7 +46,7 @@ client, relays). See `ROADMAP.md` for phases.
   - `POW_TARGET` (host, NIP-13 listing PoW bits), `POW_MIN_DIFFICULTY` (client rejects below), `REPUTATION_PATH` (client, gitignored)
   - `MODEL_ALLOWLIST` / `MODEL_ALLOWLIST_PATH` (host refuses to serve + client filters; unset = permissive), `CSAM_HASHER` (image gate; unset = image disabled, fail-closed)
   - `REPUTATION_PATH`, `HISTORY_PATH` (client GUI local stores; both gitignored)
-  - `PORT`, `HOST_ENDPOINT`, `PRICE_MSAT_PER_TOKEN`, `CHUNK_TOKENS` (metered-settlement chunk size)
+  - `PORT`, `HOST_ENDPOINT`, `PRICE_MSAT_PER_TOKEN`, `CHUNK_TOKENS` (metered chunk size), `BOLT11_EXPIRY_SECONDS` (manual-pay window)
 
 ## Run & test
 - **Smoke test (must always pass):** `PAYMENTS=mock MODEL=mock PYTHONPATH=. .venv/bin/python smoke_test.py`

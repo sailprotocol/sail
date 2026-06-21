@@ -108,6 +108,25 @@ def main() -> None:
         # The fix: pay for what was delivered, NOT the full max_tokens prepay.
         assert spent < max_tokens * PRICE_MSAT_PER_TOKEN, \
             f"expected metered spend < full prepay {max_tokens * PRICE_MSAT_PER_TOKEN}, got {spent}"
+
+        # --- Manual BOLT11 fallback (non-NWC wallets): one ceiling invoice, settle, stream. ---
+        bt = c.post("/v1/inference/bolt11", json={"prompt": "hi from bolt11",
+                                                  "max_tokens": max_tokens}).json()
+        assert bt["amount_msat"] == max_tokens * PRICE_MSAT_PER_TOKEN, "bolt11 should invoice the ceiling"
+        assert c.get(f"/v1/inference/bolt11/{bt['session_id']}/status").json()["state"] == "waiting"
+        # serving before settlement is refused
+        assert c.post(f"/v1/inference/bolt11/{bt['session_id']}/stream").status_code == 402
+        c.post("/mock/settle", json={"payment_hash": bt["payment_hash"]})  # simulate a foreign wallet paying
+        assert c.get(f"/v1/inference/bolt11/{bt['session_id']}/status").json()["state"] == "settled"
+        with c.stream("POST", f"/v1/inference/bolt11/{bt['session_id']}/stream") as s:
+            assert s.status_code == 200, s.status_code
+            b11 = "".join(s.iter_text())
+        b11_text, _, b11_meta = b11.partition(DONE_MARKER)
+        b11_spent = json.loads(b11_meta)["spent_msat"]
+        assert b11_text.strip(), "bolt11 stream produced no tokens"
+        assert b11_spent == max_tokens * PRICE_MSAT_PER_TOKEN, "bolt11 spend should be the ceiling"
+        print(f"[test] bolt11 fallback: invoice {bt['amount_msat']} msat -> settled -> streamed "
+              f"(spent {b11_spent} msat = ceiling)")
         print("[test] PASS")
 
 

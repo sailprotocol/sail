@@ -168,3 +168,62 @@ def run_inference(host, prompt: str, max_tokens: int = 64) -> Iterator[dict]:
         yield {"type": "error", "kind": "other", "message": str(e)}
     finally:
         reputation.record(host.pubkey, success=ok, latency_ms=(latency_ms if ok else None))
+
+
+def run_inference_bolt11(host, prompt: str, max_tokens: int = 64,
+                         poll_seconds: float = 2.0) -> Iterator[dict]:
+    """Manual BOLT11 fallback for non-NWC wallets: the host issues ONE invoice for the ceiling,
+    the user pays it from any wallet, the host confirms settlement via its own LND, then streams.
+    Yields: {"type":"invoice", bolt11, amount_msat, payment_hash}, optional {"type":"waiting"},
+    {"type":"token"}, {"type":"done", spent_msat, latency_ms}, or {"type":"error", kind, message}.
+    """
+    ep = host.endpoint
+    proxy = proxy_for(ep)
+    read_to = float(os.getenv("CLIENT_READ_TIMEOUT", "300"))
+    stream_timeout = httpx.Timeout(connect=15.0, read=read_to, write=15.0, pool=15.0)
+    t0 = time.monotonic()
+    ok = False
+    spent_msat = 0
+    latency_ms = 0.0
+    try:
+        r = httpx.post(f"{ep}/v1/inference/bolt11",
+                       json={"prompt": prompt, "max_tokens": max_tokens}, proxy=proxy)
+        if r.status_code != 200:
+            raise RuntimeError(f"bolt11 create failed: {r.status_code} {r.text[:200]}")
+        inv = r.json()
+        sid = inv["session_id"]
+        yield {"type": "invoice", "bolt11": inv["invoice"], "amount_msat": inv["amount_msat"],
+               "payment_hash": inv["payment_hash"], "expires_in": inv.get("expires_in")}
+
+        # Poll until the host's node sees the (foreign-wallet) payment settle, or it expires.
+        while True:
+            st = httpx.get(f"{ep}/v1/inference/bolt11/{sid}/status", proxy=proxy, timeout=15.0).json()
+            state = st.get("state")
+            if state == "settled":
+                break
+            if state == "expired":
+                yield {"type": "error", "kind": "expired",
+                       "message": "invoice expired before payment"}
+                return
+            yield {"type": "waiting"}
+            time.sleep(poll_seconds)
+
+        # Settled -> stream the response (single payment, up to max_tokens; ceiling already paid).
+        with httpx.stream("POST", f"{ep}/v1/inference/bolt11/{sid}/stream",
+                          timeout=stream_timeout, proxy=proxy) as s:
+            if s.status_code != 200:
+                raise RuntimeError(f"stream failed: {s.status_code} {s.read().decode(errors='replace')[:200]}")
+            body = "".join(s.iter_text())
+        text, _, meta = body.partition(DONE_MARKER)
+        if text:
+            yield {"type": "token", "text": text}
+        spent_msat = json.loads(meta)["spent_msat"] if meta else inv["amount_msat"]
+        ok = True
+        latency_ms = (time.monotonic() - t0) * 1000
+        yield {"type": "done", "spent_msat": spent_msat, "latency_ms": round(latency_ms, 1)}
+    except httpx.TransportError as e:
+        yield {"type": "error", "kind": "unreachable", "message": str(e)}
+    except Exception as e:  # noqa: BLE001
+        yield {"type": "error", "kind": "other", "message": str(e)}
+    finally:
+        reputation.record(host.pubkey, success=ok, latency_ms=(latency_ms if ok else None))

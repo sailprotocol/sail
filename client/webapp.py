@@ -70,6 +70,40 @@ class InferRequest(BaseModel):
     host_pubkey: str
     prompt: str
     max_tokens: int = 64
+    mode: str = "metered"  # "metered" (NWC/lnd) | "bolt11" (manual, any wallet)
+
+
+def _qr_svg_data_uri(text: str) -> str:
+    """Render a bolt11 string to an inline SVG data-URI QR (pure-python segno; no JS lib)."""
+    import base64
+    import io
+    import segno
+    buf = io.BytesIO()  # segno's SVG writer emits bytes
+    segno.make(text, error="m").save(buf, kind="svg", scale=4, border=2)
+    return "data:image/svg+xml;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def _bolt11_stream(start_pubkey: str, prompt: str, max_tokens: int):
+    """Manual BOLT11 fallback: stream core events as NDJSON, attaching a QR to the invoice event.
+    No host failover here (the user is paying a specific host's invoice)."""
+    host = next((h for h in core.discover_hosts() if h.pubkey == start_pubkey), None)
+    if host is None:
+        yield json.dumps({"type": "error", "kind": "unreachable", "message": "unknown host"}) + "\n"
+        return
+    buf: list[str] = []
+    for ev in core.run_inference_bolt11(host, prompt, max_tokens=max_tokens):
+        if ev["type"] == "invoice":
+            ev = {**ev, "qr_svg": _qr_svg_data_uri(ev["bolt11"])}
+        elif ev["type"] == "token":
+            buf.append(ev["text"])
+        elif ev["type"] == "done":
+            try:
+                history.save(host_pubkey=host.pubkey, model=host.models[0].name, prompt=prompt,
+                             response="".join(buf), spent_msat=ev["spent_msat"],
+                             latency_ms=ev["latency_ms"])
+            except Exception:
+                pass
+        yield json.dumps(ev) + "\n"
 
 
 def _infer_stream(start_pubkey: str, prompt: str, max_tokens: int):
@@ -119,8 +153,9 @@ def _infer_stream(start_pubkey: str, prompt: str, max_tokens: int):
 
 @app.post("/api/infer")
 def api_infer(req: InferRequest):
+    stream = (_bolt11_stream if req.mode == "bolt11" else _infer_stream)
     return StreamingResponse(
-        _infer_stream(req.host_pubkey, req.prompt, req.max_tokens),
+        stream(req.host_pubkey, req.prompt, req.max_tokens),
         media_type="application/x-ndjson",
     )
 

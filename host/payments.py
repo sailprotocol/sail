@@ -31,12 +31,18 @@ class LightningBackend:
         """
         raise NotImplementedError
 
+    def is_settled(self, payment_hash_hex: str) -> bool:
+        """Has the invoice been paid? Used by the manual BOLT11 fallback, where a foreign wallet
+        pays and the host confirms settlement against its own node (not via a revealed preimage)."""
+        raise NotImplementedError
+
 
 class MockLightning(LightningBackend):
     """No real node. Generates a real preimage/hash pair and 'settles' on demand."""
 
     def __init__(self) -> None:
         self._hash_to_preimage: dict[str, str] = {}
+        self._settled: set[str] = set()
 
     def create_invoice(self, amount_msat: int) -> tuple[str, str]:
         preimage = secrets.token_bytes(32)
@@ -47,6 +53,13 @@ class MockLightning(LightningBackend):
 
     def reveal_preimage(self, payment_hash_hex: str) -> str | None:
         return self._hash_to_preimage.get(payment_hash_hex)
+
+    def mark_settled(self, payment_hash_hex: str) -> None:
+        """Mock-only: simulate a foreign wallet paying the invoice (driven by /mock/settle)."""
+        self._settled.add(payment_hash_hex)
+
+    def is_settled(self, payment_hash_hex: str) -> bool:
+        return payment_hash_hex in self._settled
 
 
 class LndLightning(LightningBackend):
@@ -79,6 +92,13 @@ class LndLightning(LightningBackend):
         # r_hash is base64-encoded bytes in LND's REST gateway; we want hex.
         payment_hash = base64.b64decode(data["r_hash"]).hex()
         return data["payment_request"], payment_hash
+
+    def is_settled(self, payment_hash_hex: str) -> bool:
+        # lookupinvoice by hex payment hash; SETTLED means a (foreign) wallet paid it.
+        r = self._client.get(f"/v1/invoice/{payment_hash_hex}")
+        if r.status_code != 200:
+            return False
+        return r.json().get("state") == "SETTLED"
 
 
 def get_backend() -> LightningBackend:

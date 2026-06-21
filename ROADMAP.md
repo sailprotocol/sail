@@ -101,11 +101,11 @@ Follow-ups for the web client (`client/webapp.py` + `client/static/`, shared log
   confirm step — no silent spend. During streaming, show **running sats spent live** as chunks
   settle. Replace the bare "paying…" state with **"paying N sats to `<model>`"** so the user
   always knows who they're paying and how much.
-- **Broad wallet support / BOLT11 fallback.** NWC only covers Nostr-native wallets (Alby, Zeus,
-  Coinos, Primal), not mainstream ones (Strike, BlueWallet, Phoenix, Cash App). For universal
-  reach, add a manual **BOLT11 path** — one invoice per prompt/session shown via **QR + copy**
-  that ANY Lightning wallet can pay — accepting coarser (non-per-chunk) metering for those
-  wallets. Keep **NWC as the automated path** where supported.
+- **✅ Broad wallet support / BOLT11 fallback — landed.** Non-NWC wallets (Strike, BlueWallet,
+  Phoenix, Cash App) pay a single ceiling invoice (`price × max_tokens`) shown as **QR + copy**;
+  the host confirms settlement via its own LND, then streams. NWC stays the fine-grained automated
+  path. **Known v1 gap:** a manual payment that settles but whose inference then fails is **not
+  refunded** (user bounds spend via `max_tokens`); needs settlement-aware refund/credit later.
 - **Latency robustness.** Per-token streaming so the user sees progress mid-chunk (not just at
   chunk boundaries); tune `CHUNK_TOKENS` vs. payment round-trips; show a clear "still
   generating…" state instead of a silent wait/timeout. (Server keeps the model warm via
