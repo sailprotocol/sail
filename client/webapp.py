@@ -32,11 +32,19 @@ from client import wallet
 
 app = FastAPI(title="SAIL client")
 _STATIC = pathlib.Path(__file__).parent / "static"
+# The shared SAIL stylesheet is owned by host/static (single source); the client serves the same
+# file so its look can't drift from the host pages. (host/ is already a dependency — see core.py.)
+_SAIL_CSS = pathlib.Path(__file__).resolve().parents[1] / "host" / "static" / "sail.css"
 
 
 @app.get("/")
 def index():
     return FileResponse(_STATIC / "index.html")
+
+
+@app.get("/sail.css")
+def sail_css():
+    return FileResponse(_SAIL_CSS, media_type="text/css")
 
 
 @app.get("/api/hosts")

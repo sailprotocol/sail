@@ -1,0 +1,98 @@
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+/*
+ * sail.css — the SAIL design system. Single source for tokens, fonts, and shared components,
+ * served by both the host daemon (dashboard + wizard) and the client web app so the three
+ * surfaces can't drift. Page-specific layout stays inline in each page; this file is the system.
+ * Tokens and component looks are frozen to match the host pages — do not restyle here.
+ */
+:root{
+  --ink:#0a0e15; --ink-2:#10161f; --ink-3:#161d28;
+  --line:#202a37; --line-faint:rgba(122,143,168,0.08);
+  --fg:#e9eef5; --muted:#8b98aa;
+  --beacon:#f7931a; --beacon-2:#ffb24d; --beacon-deep:#b8690d;
+  --code-bg:#0c1119;
+  --good:#5fb27a; --good-bg:rgba(95,178,122,0.1);
+  --bad:#f85149; --danger:#c2543f; --danger-bg:rgba(194,84,63,0.1);
+  --warn-bg:rgba(247,147,26,0.07);
+}
+*{box-sizing:border-box;}
+body{margin:0; background:var(--ink); color:var(--fg); font-family:'Inter',system-ui,sans-serif; line-height:1.6; -webkit-font-smoothing:antialiased;}
+a{color:var(--beacon); text-decoration:none;} a:hover{text-decoration:underline;}
+strong{color:var(--fg); font-weight:600;}
+.mono{font-family:'IBM Plex Mono',monospace;}
+.muted{color:var(--muted);}
+h1,h2,h3{font-family:'Bricolage Grotesque'; letter-spacing:-0.01em; margin:0;}
+
+/* eyebrow */
+.eyebrow{font-family:'IBM Plex Mono',monospace; font-size:0.66rem; letter-spacing:0.18em; text-transform:uppercase; color:var(--beacon); display:block; margin-bottom:9px;}
+
+/* pill */
+.pill{display:inline-flex; align-items:center; gap:5px; font-family:'IBM Plex Mono',monospace; font-size:0.6rem; letter-spacing:0.08em; text-transform:uppercase; border:1px solid var(--beacon-deep); color:var(--beacon); border-radius:999px; padding:3px 9px;}
+.pill.good{border-color:var(--good); color:var(--good);}
+.pill.bad{border-color:var(--bad); color:var(--bad);}
+.pill.q{border-color:var(--line); color:var(--muted);}
+
+/* card + key/value rows */
+.card{border:1px solid var(--line); border-radius:14px; background:var(--ink-2); padding:20px 22px; margin-bottom:16px;}
+.card h3{font-size:1.05rem; font-weight:700; margin-bottom:14px;}
+.kv{display:flex; justify-content:space-between; gap:14px; padding:9px 0; border-bottom:1px solid var(--line-faint); font-size:0.9rem;}
+.kv:last-child{border-bottom:none;} .kv .key{color:var(--muted);} .kv .val{color:var(--fg); text-align:right;}
+
+/* buttons — neutral by default; .primary/.ghost/.danger are the modifiers */
+.btn{font-family:'Bricolage Grotesque'; font-weight:700; font-size:0.92rem; border:1px solid var(--line); background:var(--ink-3); color:var(--fg); padding:10px 18px; border-radius:9px; cursor:pointer; transition:all .15s;}
+.btn:hover{border-color:var(--beacon);}
+.btn:disabled{opacity:.45; cursor:not-allowed;}
+.btn.primary{background:var(--beacon); color:#1a0f02; border-color:var(--beacon);} .btn.primary:hover{background:var(--beacon-2);}
+.btn.ghost{background:var(--ink-3); color:var(--fg); border:1px solid var(--line);} .btn.ghost:hover{border-color:var(--beacon);}
+.btn.danger{color:var(--danger); border-color:rgba(194,84,63,0.4);} .btn.danger:hover{border-color:var(--danger); background:var(--danger-bg);}
+.btn.sm{font-size:0.82rem; padding:8px 16px;}
+
+/* form fields */
+.field{margin-bottom:15px;} .field label{display:flex; gap:7px; align-items:center; font-size:0.82rem; color:var(--muted); margin-bottom:6px;}
+.field .input{display:flex; align-items:center; gap:8px;}
+.field input{flex:1; background:var(--code-bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:var(--fg); font-family:'IBM Plex Mono',monospace; font-size:0.88rem;}
+.field input:focus{outline:none; border-color:var(--beacon);} .field .unit{font-size:0.82rem; color:var(--muted);}
+
+/* note callout */
+.note{font-size:0.85rem; border:1px solid var(--line); border-radius:10px; padding:11px 14px; margin-top:12px; color:var(--muted);}
+.note.bad{border-color:var(--bad); color:#ffb3ad;} .note .mono{color:var(--fg);}
+
+/* meters (ease/sovereignty) */
+.meters{display:flex; gap:18px; margin-top:11px;}
+.meter{display:inline-flex; align-items:center; gap:6px;}
+.meter .lbl{font-family:'IBM Plex Mono',monospace; font-size:0.56rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);}
+.meter .seg{width:11px; height:5px; border-radius:2px; background:var(--ink-3);} .meter .seg.on{background:var(--beacon);} .meter.sov .seg.on{background:var(--good);}
+
+/* info tooltip */
+.info{position:relative; display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; border-radius:50%; border:1px solid var(--line); color:var(--muted); font-family:'IBM Plex Mono',monospace; font-size:0.62rem; cursor:help; background:var(--ink-3);}
+.info:hover{border-color:var(--beacon); color:var(--beacon);}
+.info .tip{position:absolute; left:50%; transform:translateX(-50%); bottom:23px; width:min(230px,90vw); max-width:90vw; z-index:30; background:var(--ink-3); border:1px solid var(--line); border-left:3px solid var(--beacon); border-radius:8px; padding:10px 12px; font-size:0.8rem; line-height:1.5; color:var(--fg); box-shadow:0 12px 30px rgba(0,0,0,.55); opacity:0; visibility:hidden; transition:opacity .15s; text-align:left;}
+.info:hover .tip, .info:focus .tip, .info:focus-within .tip{opacity:1; visibility:visible;}
+
+/* beacon + pulse */
+.beacon{width:16px; height:16px; border-radius:50%; background:var(--beacon); position:relative; box-shadow:0 0 12px var(--beacon);}
+.beacon::after{content:""; position:absolute; inset:-7px; border-radius:50%; border:2px solid var(--beacon); animation:pulse 2.2s ease-out infinite;}
+@keyframes pulse{0%{transform:scale(.6); opacity:.9;} 100%{transform:scale(1.8); opacity:0;}}
+
+/* spinner */
+@keyframes spin{to{transform:rotate(360deg);}}
+.spinner{width:16px; height:16px; border:2px solid var(--line); border-top-color:var(--beacon); border-radius:50%; animation:spin .8s linear infinite; display:inline-block; vertical-align:middle;}
+
+/* modal / scrim */
+.scrim{position:fixed; inset:0; background:rgba(5,8,12,0.7); backdrop-filter:blur(2px); display:none; align-items:center; justify-content:center; padding:22px; z-index:100;}
+.scrim.on{display:flex;}
+.modal{width:480px; max-width:100%; background:var(--ink-2); border:1px solid var(--line); border-radius:15px; padding:24px;}
+.modal h3{font-size:1.2rem; font-weight:700; margin-bottom:8px;}
+.modal p{font-size:0.92rem; color:var(--muted); margin:0 0 14px;} .modal p strong{color:var(--fg);}
+.modal .actions{display:flex; gap:11px; justify-content:flex-end; margin-top:18px;}
+
+/* --- accessibility floor --- */
+:focus-visible{outline:2px solid var(--beacon); outline-offset:3px; border-radius:4px;}
+.opt:focus-within{outline:2px solid var(--beacon); outline-offset:2px;}
+
+/* Reduced motion: kill animation/transition, and swap the spinner for a static dot so a
+   non-spinning ring doesn't read as "frozen". */
+@media (prefers-reduced-motion: reduce){
+  *{animation:none !important; transition:none !important;}
+  .spinner{border-top-color:var(--beacon); border-right-color:var(--beacon); opacity:.7;}
+}

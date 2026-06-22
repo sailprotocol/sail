@@ -339,6 +339,13 @@ def _is_local(request: Request) -> bool:
     return ".onion" not in (request.headers.get("host", ""))
 
 
+@app.get("/sail.css")
+def sail_css():
+    """Shared SAIL stylesheet (design tokens + components), used by the dashboard + wizard. Static
+    design assets only — no data — so it's served ungated."""
+    return FileResponse(_STATIC / "sail.css", media_type="text/css")
+
+
 @app.get("/")
 def dashboard(request: Request):
     if not _is_local(request):
