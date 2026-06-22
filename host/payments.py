@@ -154,6 +154,74 @@ class PhoenixdLightning(LightningBackend):
         return bool(r.json().get("isPaid"))
 
 
+def _nwc_run(coro_factory):
+    """Run an NWC (async) call from this sync backend, reusing the CLIENT's async bridge
+    (client.core._run_async) so we don't reimplement the threadpool/event-loop plumbing. A
+    timeout keeps a dead relay from hanging the host. Imported lazily so mock/lnd/phoenixd never
+    pull in nostr_sdk or the client package."""
+    import asyncio
+    from client.core import _run_async
+    return _run_async(lambda: asyncio.wait_for(coro_factory(), 30.0))
+
+
+def nwc_capability(uri: str) -> tuple[bool, str]:
+    """Can this NWC wallet RECEIVE? Reads its NIP-47 info event (get_info, kind 13194) and checks
+    it advertises make_invoice — many wallets are pay-only and can't host. Returns (ok, message);
+    the setup endpoint surfaces the message to the picker. Network call to the wallet's relay."""
+    try:
+        from nostr_sdk import Nwc, NostrWalletConnectUri, Method
+        client = Nwc(NostrWalletConnectUri.parse(uri))  # same transport the client uses to pay
+        info = _nwc_run(client.get_info)
+    except Exception as e:  # noqa: BLE001 — malformed URI, relay unreachable, or timeout
+        return False, f"couldn't reach the NWC wallet: {str(e)[:140]}"
+    if Method.MAKE_INVOICE not in info.methods:
+        return False, "this wallet can't receive over NWC (it doesn't support make_invoice)"
+    return True, "ok"
+
+
+class NwcLightning(LightningBackend):
+    """Receive over Nostr Wallet Connect (NIP-47): the host is an NWC *client* against the
+    operator's own wallet — issuing invoices with make_invoice and confirming them with
+    lookup_invoice, instead of the client's pay_invoice. Reuses the exact same transport the client
+    already uses to pay (nostr_sdk.Nwc + NostrWalletConnectUri), so nothing is reimplemented.
+
+    Only as sovereign as the wallet: a custodial provider can freeze payouts or, with KYC, link the
+    host. Many wallets are pay-only, so __init__ runs a capability guard and fails fast.
+      NWC_URI  the wallet connection string (secret) — the same var the client uses to pay.
+    """
+
+    def __init__(self) -> None:
+        uri = os.environ.get("NWC_URI", "").strip()
+        if not uri:
+            raise RuntimeError("PAYMENTS=nwc requires NWC_URI (the wallet connection string)")
+        ok, detail = nwc_capability(uri)
+        if not ok:
+            raise RuntimeError(detail)
+        from nostr_sdk import Nwc, NostrWalletConnectUri
+        self._nwc = Nwc(NostrWalletConnectUri.parse(uri))  # persistent: reuses the relay connection
+
+    def create_invoice(self, amount_msat: int, expiry_seconds: int | None = None) -> tuple[str, str]:
+        from nostr_sdk import MakeInvoiceRequest
+        req = MakeInvoiceRequest(amount=amount_msat, description="SAIL inference",
+                                 description_hash=None, expiry=expiry_seconds)  # NIP-47 amount = msat
+        try:
+            resp = _nwc_run(lambda: self._nwc.make_invoice(req))
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"NWC make_invoice failed: {e}") from e
+        if not resp.payment_hash:
+            raise RuntimeError("NWC wallet returned an invoice without a payment_hash")
+        return resp.invoice, resp.payment_hash
+
+    def is_settled(self, payment_hash_hex: str) -> bool:
+        from nostr_sdk import LookupInvoiceRequest, TransactionState
+        req = LookupInvoiceRequest(payment_hash=payment_hash_hex, invoice=None)
+        try:
+            resp = _nwc_run(lambda: self._nwc.lookup_invoice(req))
+        except Exception:  # noqa: BLE001 — unknown hash / unreachable -> treat as unpaid
+            return False
+        return resp.state == TransactionState.SETTLED or resp.settled_at is not None
+
+
 def get_backend() -> LightningBackend:
     kind = os.getenv("PAYMENTS", "mock").lower()
     if kind == "mock":
@@ -162,4 +230,6 @@ def get_backend() -> LightningBackend:
         return LndLightning()
     if kind == "phoenixd":
         return PhoenixdLightning()
+    if kind == "nwc":
+        return NwcLightning()
     raise ValueError(f"unknown PAYMENTS backend: {kind}")

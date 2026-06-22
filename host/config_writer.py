@@ -85,16 +85,35 @@ def update_env_file(updates: dict[str, str], path: pathlib.Path | None = None) -
 
 # --- per-tier / per-step env contracts (validation) -------------------------
 def payout_env(tier: str, fields: dict[str, str]) -> dict[str, str]:
-    """Build the `.env.host` updates for a payout tier (spec §7). Only the phoenixd tier is wired
-    in setup right now; lnd/nwc are deliberately not enabled yet (one seam at a time)."""
+    """Build the `.env.host` updates for a payout tier (spec §7): phoenixd (self-custodial),
+    lnd (own node), or nwc (bring-your-own wallet). Validates the tier's fields; the deeper NWC
+    capability check (can the wallet actually receive?) is a network call done by the setup
+    endpoint, not here — this stays pure."""
     tier = (tier or "").lower()
+    fields = fields or {}
     if tier == "phoenixd":
         # The password is written by provisioning (it owns the seed/node); the GUI's only input is
         # the seed-backup confirmation. We just select the rail + ensure the API URL has a default.
-        url = (fields or {}).get("api_url", "").strip() or "http://127.0.0.1:9740"
+        url = fields.get("api_url", "").strip() or "http://127.0.0.1:9740"
         return {"PAYMENTS": "phoenixd", "PHOENIXD_API_URL": url}
-    if tier in ("lnd", "nwc"):
-        raise ValueError(f"payout tier {tier!r} is not available in setup yet")
+    if tier == "lnd":
+        # Operator's own node, entered manually (never auto-imported from the live host's creds).
+        rest = (fields.get("rest_host") or "").strip()
+        cert = (fields.get("tls_cert_path") or "").strip()
+        macaroon = (fields.get("macaroon_path") or "").strip()
+        if not (rest and cert and macaroon):
+            raise ValueError("LND needs REST host, TLS cert path, and macaroon path")
+        if not re.match(r"^https?://", rest):
+            raise ValueError("LND REST host must be an http(s):// URL")
+        return {"PAYMENTS": "lnd", "LND_REST_HOST": rest,
+                "LND_TLS_CERT_PATH": cert, "LND_MACAROON_PATH": macaroon}
+    if tier == "nwc":
+        uri = (fields.get("nwc_uri") or "").strip()
+        if not uri:
+            raise ValueError("NWC needs a wallet connection string")
+        if not uri.startswith("nostr+walletconnect://"):
+            raise ValueError("NWC string must start with nostr+walletconnect://")
+        return {"PAYMENTS": "nwc", "NWC_URI": uri}
     raise ValueError(f"unknown payout tier: {tier!r}")
 
 

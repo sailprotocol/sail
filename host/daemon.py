@@ -521,24 +521,40 @@ async def setup_pricing(request: Request):
 
 @app.post("/api/setup/payout")
 async def setup_payout(request: Request):
-    """Step 4. Only phoenixd is wired in setup: it provisions a node and returns the seed for the
-    wizard's back-up step. lnd/nwc tiers are not enabled here yet (one seam at a time)."""
+    """Step 4 — configure a payout tier. phoenixd provisions a node + returns the seed for the
+    back-up step; lnd just writes the manually-entered creds; nwc capability-checks the wallet
+    (must support make_invoice to receive) before writing. None touch the live host's creds."""
     if not _is_local(request):
         return _NOT_FOUND
     from host import config_writer
     body = await request.json()
     tier = (body.get("tier") or "").lower()
-    if tier != "phoenixd":
-        return JSONResponse({"error": f"payout tier {tier!r} is not available in setup yet"},
-                            status_code=400)
+    fields = body.get("fields") or {}
     try:
-        config_writer.update_env_file(config_writer.payout_env(tier, body.get("fields") or {}))
-        from host import phoenixd_setup
-        result = phoenixd_setup.provision()  # downloads + first-runs phoenixd; writes the password
-    except Exception as e:  # noqa: BLE001 — surface provisioning failure to the wizard
-        return JSONResponse({"error": str(e)[:300]}, status_code=500)
-    # seed_words is shown once in the local wizard, then discarded; never persisted/transmitted here.
-    return {"ok": True, "tier": tier, "seed_words": result["seed_words"], "service": result["service"]}
+        updates = config_writer.payout_env(tier, fields)  # validates field presence/format
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    if tier == "nwc":
+        # Capability guard: a pay-only wallet can't host. Block (not warn) with a clear message.
+        from host import payments as pay_mod
+        ok, detail = pay_mod.nwc_capability(updates["NWC_URI"])
+        if not ok:
+            return JSONResponse({"error": detail, "capable": False}, status_code=400)
+
+    if tier == "phoenixd":
+        try:
+            config_writer.update_env_file(updates)
+            from host import phoenixd_setup
+            result = phoenixd_setup.provision()  # downloads + first-runs phoenixd; writes the password
+        except Exception as e:  # noqa: BLE001 — surface provisioning failure to the wizard
+            return JSONResponse({"error": str(e)[:300]}, status_code=500)
+        # seed_words is shown once in the local wizard, then discarded — never persisted/transmitted.
+        return {"ok": True, "tier": tier, "seed_words": result["seed_words"], "service": result["service"]}
+
+    # lnd / nwc: write the env; no provisioning, no seed step. Service restart happens at go-live.
+    config_writer.update_env_file(updates)
+    return {"ok": True, "tier": tier}
 
 
 @app.post("/api/setup/golive")

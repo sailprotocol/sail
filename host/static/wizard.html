@@ -100,6 +100,7 @@
   .livecard .row{display:flex; justify-content:space-between; font-size:0.84rem; padding:8px 0; border-top:1px solid var(--line-faint); text-align:left;}
   .livecard .row .mono{color:var(--fg); max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
 
+  .paycfg{margin-top:12px; padding-top:14px; border-top:1px solid var(--line);}
   .note{font-size:0.85rem; border:1px solid var(--line); border-radius:10px; padding:11px 14px; margin-top:12px; color:var(--muted);}
   .note.bad{border-color:var(--bad); color:#ffb3ad;} .note .mono{color:var(--fg);}
   .nav{display:flex; gap:12px; align-items:center; margin-top:26px; padding-top:20px; border-top:1px solid var(--line);}
@@ -165,9 +166,23 @@
     <label class="opt sel" data-pay="phoenixd"><input type="radio" name="pay" checked><span class="dot"></span><span class="name">phoenixd <span class="mono" style="color:var(--beacon-2);font-weight:400">— self-custodial</span></span><span class="meta">We run a node for you. You hold the keys; no channels to manage.</span><span class="pill">Recommended</span>
       <div class="meters"><span class="meter"><span class="lbl">Ease</span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span><span class="seg"></span></span><span class="meter sov"><span class="lbl">Sov</span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span><span class="seg"></span></span></div>
     </label>
-    <label class="opt disabled" data-pay="lnd"><input type="radio" name="pay" disabled><span class="dot"></span><span class="name">Your own node <span class="mono" style="color:var(--beacon-2);font-weight:400">— LND</span></span><span class="meta">Connect a node you run. Most sovereign; most setup.</span><span class="pill q">Soon</span></label>
-    <label class="opt disabled" data-pay="nwc"><input type="radio" name="pay" disabled><span class="dot"></span><span class="name">Connect a wallet <span class="mono" style="color:var(--beacon-2);font-weight:400">— NWC</span></span><span class="meta">As sovereign as the wallet — a custodial one can freeze or deanonymize you.</span><span class="pill q">Soon</span></label>
-    <div class="note" id="payoutnote">phoenixd is the wired tier today — your own LND and NWC wallets land in a later step. Choosing phoenixd downloads + starts a self-custodial node and shows your recovery phrase next.</div>
+    <label class="opt" data-pay="lnd"><input type="radio" name="pay"><span class="dot"></span><span class="name">Your own node <span class="mono" style="color:var(--beacon-2);font-weight:400">— LND</span></span><span class="meta">Connect a node you run. Most sovereign; most setup.</span><span class="pill q">Most sovereign</span></label>
+    <label class="opt" data-pay="nwc"><input type="radio" name="pay"><span class="dot"></span><span class="name">Connect a wallet <span class="mono" style="color:var(--beacon-2);font-weight:400">— NWC</span></span><span class="meta">As sovereign as the wallet — a custodial one can freeze or deanonymize you.</span><span class="pill q">Bring your own</span></label>
+
+    <!-- per-tier config, revealed for the selected rail -->
+    <div class="paycfg" id="cfg-lnd" style="display:none">
+      <div class="field"><label>REST host</label><div class="input"><input id="lnd-rest" placeholder="https://your-node:8080" spellcheck="false"></div></div>
+      <div class="field"><label>TLS certificate path</label><div class="input"><input id="lnd-cert" placeholder="~/.config/sail/lnd/tls.cert" spellcheck="false"></div></div>
+      <div class="field"><label>Invoice macaroon path <span class="info" tabindex="0">i<span class="tip">Bake one limited to invoices:read/write + info:read — not the admin macaroon. If the host is compromised, the damage is capped at "can issue invoices."</span></span></label><div class="input"><input id="lnd-mac" placeholder="~/.config/sail/lnd/invoice.macaroon" spellcheck="false"></div></div>
+      <div class="note">Manual entry — your node's creds aren't imported for you. You need inbound liquidity to receive.</div>
+    </div>
+    <div class="paycfg" id="cfg-nwc" style="display:none">
+      <div class="field"><label>NWC connection string</label><div class="input"><input id="nwc-uri" placeholder="nostr+walletconnect://…" spellcheck="false"></div></div>
+      <div class="note">Kept on this machine, never published. We'll check the wallet can receive (many can't) before going live.</div>
+      <div class="note bad">A custodial wallet can freeze your payouts or, with KYC, tie this host — and your onion — to your identity, undoing Tor's anonymity. Self-custody (phoenixd or your own node) avoids this.</div>
+    </div>
+
+    <div class="note" id="payoutnote"></div>
   </section>
 
   <!-- SEED (phoenixd only) -->
@@ -249,7 +264,7 @@ function show(){
   panels.forEach(p=>p.classList.toggle('on', p.dataset.step===cur));
   backBtn.style.visibility = (idx===0||cur==='live') ? 'hidden':'visible';
   nextBtn.textContent = cur==='live' ? 'Go live'
-    : (cur==='payout' && payTier()==='phoenixd' ? 'Next: set up node'
+    : (cur==='payout' ? (payTier()==='phoenixd' ? 'Next: set up node' : payTier()==='nwc' ? 'Check & continue' : 'Save & continue')
     : (cur==='pricing' ? 'Next: payout' : 'Next'));
   if(cur==='live') buildSummary();
   railRender(cur); validate();
@@ -257,7 +272,12 @@ function show(){
 function validate(){
   const cur=steps()[idx]; let ok=true;
   if(cur==='detect') ok=detectDone;
-  if(cur==='payout') ok = payTier()==='phoenixd';
+  if(cur==='payout'){
+    const t=payTier();
+    if(t==='lnd') ok = !!($('lnd-rest').value.trim() && $('lnd-cert').value.trim() && $('lnd-mac').value.trim());
+    else if(t==='nwc') ok = !!$('nwc-uri').value.trim();
+    else ok = true;  // phoenixd
+  }
   if(cur==='seed') ok=seedVerified;
   nextBtn.disabled=!ok;
 }
@@ -340,19 +360,45 @@ async function savePricing(){
 }
 
 // ---- Step 4: payout ----
+const PAYNOTE={
+  phoenixd:'Choosing phoenixd downloads + starts a self-custodial node and shows your recovery phrase next.',
+  lnd:'Invoices are issued by your own LND node — most sovereign, no third party in the path.',
+  nwc:'Invoices are issued by your connected wallet. As sovereign as that wallet (see warning above).'
+};
+function renderPayCfg(){
+  const t=payTier();
+  $('cfg-lnd').style.display = t==='lnd' ? 'block':'none';
+  $('cfg-nwc').style.display = t==='nwc' ? 'block':'none';
+  $('payoutnote').className='note'; $('payoutnote').textContent = PAYNOTE[t]||'';
+}
 document.querySelectorAll('.opt[data-pay]').forEach(o=>o.addEventListener('change',()=>{
-  if(o.classList.contains('disabled')) return;
   document.querySelectorAll('.opt[data-pay]').forEach(x=>x.classList.toggle('sel', x.querySelector('input').checked));
-  show();
+  renderPayCfg(); show();
 }));
+['lnd-rest','lnd-cert','lnd-mac','nwc-uri'].forEach(id=>$(id).addEventListener('input',validate));
+
 async function setupPayout(){
-  if(payTier()!=='phoenixd'){ return false; }
-  nextBtn.disabled=true; nextBtn.textContent='Setting up node…';
-  $('payoutnote').innerHTML='<span class="spinner"></span> Downloading & starting phoenixd, generating your wallet… (first run can take a moment)';
-  const r=await api('/api/setup/payout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tier:'phoenixd'})});
-  if(r.error){ $('payoutnote').className='note bad'; $('payoutnote').textContent='Setup failed: '+r.error; nextBtn.textContent='Retry'; nextBtn.disabled=false; return false; }
-  seedWords=r.seed_words; fillSeed(seedWords);
-  return true;
+  const t=payTier();
+  if(t==='phoenixd'){
+    nextBtn.disabled=true; nextBtn.textContent='Setting up node…';
+    $('payoutnote').innerHTML='<span class="spinner"></span> Downloading & starting phoenixd, generating your wallet… (first run can take a moment)';
+    const r=await api('/api/setup/payout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tier:'phoenixd'})});
+    if(r.error){ $('payoutnote').className='note bad'; $('payoutnote').textContent='Setup failed: '+r.error; nextBtn.textContent='Retry'; nextBtn.disabled=false; return false; }
+    seedWords=r.seed_words; fillSeed(seedWords); return true;
+  }
+  const fields = t==='lnd'
+    ? {rest_host:$('lnd-rest').value.trim(), tls_cert_path:$('lnd-cert').value.trim(), macaroon_path:$('lnd-mac').value.trim()}
+    : {nwc_uri:$('nwc-uri').value.trim()};
+  nextBtn.disabled=true; const old=nextBtn.textContent;
+  nextBtn.textContent = t==='nwc' ? 'Checking wallet…' : 'Saving…';
+  if(t==='nwc') $('payoutnote').innerHTML='<span class="spinner"></span> Checking the wallet can receive over NWC…';
+  const r=await api('/api/setup/payout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tier:t, fields})});
+  if(r.error){
+    $('payoutnote').className='note bad';
+    $('payoutnote').textContent = (r.capable===false ? "This wallet can't receive over NWC — " : 'Setup failed: ')+r.error;
+    nextBtn.textContent=old; nextBtn.disabled=false; return false;
+  }
+  return true;  // lnd/nwc: no seed step — advance straight to review/go-live
 }
 
 // ---- Step 4b: seed ----
@@ -378,12 +424,13 @@ function checkSeed(){
 $('v-a').addEventListener('input',checkSeed); $('v-b').addEventListener('input',checkSeed);
 
 // ---- Step 5: live ----
+const RAILDESC={phoenixd:['phoenixd','self-custodial'], lnd:['your own LND node','most sovereign'], nwc:['connected wallet','NWC']};
 function buildSummary(){
-  const t=payout.price||{}; const rail = payTier();
+  const [railName,railPill]=RAILDESC[payTier()]||[payTier(),''];
   $('sumbox').innerHTML=
     `<div class="sumrow"><span class="k">Model</span><span class="mono">${payout.model||selectedModel()||'—'}</span></div>`+
     `<div class="sumrow"><span class="k">Price</span><span><span class="mono">${$('price').value}</span> sat/token · chunk <span class="mono">${$('chunk').value}</span></span></div>`+
-    `<div class="sumrow"><span class="k">Payout</span><span>${rail} <span class="pill good">self-custodial</span></span></div>`+
+    `<div class="sumrow"><span class="k">Payout</span><span>${railName} <span class="pill good">${railPill}</span></span></div>`+
     `<div class="sumrow"><span class="k">Transport</span><span>Tor onion (created on launch)</span></div>`;
 }
 async function goLive(){
@@ -413,7 +460,7 @@ async function liveDone(st){
   nextBtn.disabled=false; nextBtn.textContent='Open dashboard'; nextBtn.onclick=()=>{ window.location='/'; };
 }
 
-show();
+renderPayCfg(); show();
 </script>
 </body>
 </html>
