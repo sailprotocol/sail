@@ -52,8 +52,12 @@ Either way, the payment goes from your wallet directly to the host. SAIL never c
 
 ## Run a host
 
-Have a GPU? Serve a model and earn sats per token. Host setup (LND, Ollama/vLLM, Nostr publishing,
-Tor onion, pricing) is documented in the docs:
+Have a GPU? Serve a model and earn sats per token. A host runs the inference daemon behind your own
+Lightning node and a Tor onion service. The supported way to run it is a **systemd service**, so it
+auto-restarts and survives reboot — coming back on the same `.onion` and pubkey.
+
+Full setup — LND macaroon, `.env.host`, the systemd unit, inbound liquidity, and verification — is
+documented in the docs:
 
 📖 **[sailprotocol.com/docs](https://sailprotocol.com/docs/)**
 

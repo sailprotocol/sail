@@ -23,3 +23,4 @@ desktop/src-tauri/gen/
 desktop/src-tauri/resources/
 desktop/src-tauri/icons/
 desktop/icon-src.png
+deploy/

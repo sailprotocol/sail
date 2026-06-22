@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up payouts — SAIL host</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0a0e15; --ink-2:#10161f; --ink-3:#161d28;
+    --line:#202a37; --line-faint:rgba(122,143,168,0.08);
+    --fg:#e9eef5; --muted:#8b98aa;
+    --beacon:#f7931a; --beacon-2:#ffb24d; --beacon-deep:#b8690d;
+    --warn-bg:rgba(247,147,26,0.07);
+    --code-bg:#0c1119;
+    --good:#5fb27a;
+  }
+  *{box-sizing:border-box;}
+  @media (prefers-reduced-motion: reduce){ *{transition:none !important;} }
+  body{
+    margin:0; background:var(--ink); color:var(--fg);
+    font-family:'Inter',system-ui,sans-serif; line-height:1.7;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--beacon); text-decoration:none;}
+  a:hover{text-decoration:underline;}
+  .mono{font-family:'IBM Plex Mono',monospace;}
+
+  /* top bar */
+  .topbar{position:sticky; top:0; z-index:50; height:60px; display:flex; align-items:center;
+    justify-content:space-between; padding:0 24px; background:rgba(10,14,21,0.82);
+    backdrop-filter:blur(10px); border-bottom:1px solid var(--line);}
+  .brand{display:flex; align-items:baseline; gap:11px;}
+  .brand .logo{font-family:'Bricolage Grotesque'; font-weight:800; font-size:1.2rem; color:var(--fg);}
+  .brand .logo b{color:var(--beacon);}
+  .brand .tag{font-family:'IBM Plex Mono',monospace; font-size:0.62rem; letter-spacing:0.14em;
+    text-transform:uppercase; color:var(--muted);}
+  .topbar .back{font-size:0.85rem; color:var(--muted);}
+  .topbar .back:hover{color:var(--fg); text-decoration:none;}
+  @media (max-width:640px){ .brand .tag{display:none;} }
+
+  /* shell */
+  main{max-width:720px; margin:0 auto; padding:54px 24px 120px;}
+  .eyebrow{font-family:'IBM Plex Mono',monospace; font-size:0.7rem; letter-spacing:0.18em;
+    text-transform:uppercase; color:var(--beacon); display:block; margin-bottom:12px;}
+  h1{font-family:'Bricolage Grotesque'; font-weight:800; font-size:2.2rem; letter-spacing:-0.02em; margin:0 0 8px;}
+  .subtitle{color:var(--muted); font-size:1.04rem; margin:0 0 34px;}
+  strong{color:var(--fg); font-weight:600;}
+
+  /* tiers */
+  fieldset{border:0; margin:0; padding:0;}
+  legend{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0);}
+  .tier{position:relative; display:block; border:1px solid var(--line); background:var(--ink-2);
+    border-radius:13px; padding:20px 22px 20px 56px; margin-bottom:14px; cursor:pointer;
+    transition:border-color .18s ease, background .18s ease, box-shadow .18s ease;}
+  .tier:hover{border-color:#2c3a4b;}
+  .tier input{position:absolute; opacity:0; pointer-events:none;}
+  /* radio dot — doubles as the beacon */
+  .tier .dot{position:absolute; left:20px; top:22px; width:18px; height:18px; border-radius:50%;
+    border:2px solid var(--line); transition:all .18s ease;}
+  .tier.sel{border-color:var(--beacon); background:#13192180; box-shadow:0 0 0 1px var(--beacon-deep) inset;}
+  .tier.sel .dot{border-color:var(--beacon); background:var(--beacon); box-shadow:0 0 10px var(--beacon);}
+  .tier:focus-within{outline:2px solid var(--beacon); outline-offset:3px;}
+
+  .tier .head{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  .tier .name{font-family:'Bricolage Grotesque'; font-weight:700; font-size:1.12rem; color:var(--fg);}
+  .tier .name .mono{font-size:0.92rem; color:var(--beacon-2); font-weight:400;}
+  .tier .blurb{color:var(--muted); font-size:0.94rem; margin:5px 0 0;}
+
+  .pill{display:inline-block; font-family:'IBM Plex Mono',monospace; font-size:0.62rem;
+    letter-spacing:0.1em; text-transform:uppercase; border:1px solid var(--beacon-deep);
+    color:var(--beacon); border-radius:999px; padding:3px 9px;}
+  .pill.q{border-color:var(--line); color:var(--muted);}
+
+  /* meters */
+  .meters{display:flex; gap:22px; margin-top:13px;}
+  .meter{display:flex; align-items:center; gap:8px;}
+  .meter .lbl{font-family:'IBM Plex Mono',monospace; font-size:0.6rem; letter-spacing:0.12em;
+    text-transform:uppercase; color:var(--muted);}
+  .meter .seg{width:13px; height:5px; border-radius:2px; background:var(--ink-3);}
+  .meter .seg.on{background:var(--beacon);}
+  .meter.sov .seg.on{background:var(--good);}
+
+  /* info hover */
+  .info{position:relative; display:inline-flex; align-items:center; justify-content:center;
+    width:18px; height:18px; border-radius:50%; border:1px solid var(--line); color:var(--muted);
+    font-family:'IBM Plex Mono',monospace; font-size:0.72rem; cursor:help; background:var(--ink-3);
+    flex:none; margin-left:auto;}
+  .info:hover, .info:focus-visible{border-color:var(--beacon); color:var(--beacon); outline:none;}
+  .info .tip{position:absolute; right:-6px; top:26px; width:280px; z-index:20;
+    background:var(--ink-3); border:1px solid var(--line); border-left:3px solid var(--beacon);
+    border-radius:9px; padding:12px 14px; font-size:0.85rem; line-height:1.55; color:var(--fg);
+    box-shadow:0 12px 30px rgba(0,0,0,.5); opacity:0; visibility:hidden; transform:translateY(-4px);
+    transition:opacity .16s ease, transform .16s ease; text-align:left; cursor:auto; font-weight:400;}
+  .info:hover .tip, .info:focus .tip, .info:focus-within .tip{opacity:1; visibility:visible; transform:translateY(0);}
+  .info .tip b{color:var(--beacon-2); font-weight:600;}
+  @media (max-width:560px){ .info .tip{width:220px;} }
+
+  /* config panels */
+  .cfg{display:none; margin-top:18px; padding-top:18px; border-top:1px solid var(--line);}
+  .tier.sel .cfg{display:block;}
+  .field{margin-bottom:14px;}
+  .field label{display:flex; align-items:center; gap:7px; font-size:0.82rem; color:var(--muted);
+    margin-bottom:6px; font-weight:500;}
+  .field input[type=text]{width:100%; background:var(--code-bg); border:1px solid var(--line);
+    border-radius:8px; padding:10px 12px; color:var(--fg); font-family:'IBM Plex Mono',monospace;
+    font-size:0.84rem;}
+  .field input:focus{outline:none; border-color:var(--beacon);}
+  .field .hint{font-size:0.78rem; color:var(--muted); margin-top:5px;}
+
+  .callout{border:1px solid var(--line); border-left:3px solid var(--beacon); background:var(--warn-bg);
+    border-radius:10px; padding:14px 16px; margin:4px 0 0; font-size:0.88rem;}
+  .callout .lead{font-weight:600; color:var(--fg); display:flex; align-items:center; gap:9px; margin-bottom:4px;}
+  .callout .lead::before{content:""; width:8px; height:8px; transform:rotate(45deg);
+    background:var(--beacon); box-shadow:0 0 8px var(--beacon); flex:none;}
+  .callout p{margin:0;}
+
+  .auto{font-size:0.9rem; color:var(--muted);}
+  .auto .ok{color:var(--good); font-weight:600;}
+
+  /* actions */
+  .actions{margin-top:30px; display:flex; align-items:center; gap:18px; flex-wrap:wrap;}
+  .btn{font-family:'Bricolage Grotesque'; font-weight:700; font-size:1rem; border:none;
+    background:var(--beacon); color:#1a0f02; padding:13px 26px; border-radius:10px; cursor:pointer;
+    transition:background .15s ease;}
+  .btn:hover{background:var(--beacon-2);}
+  .btn:focus-visible{outline:2px solid var(--fg); outline-offset:3px;}
+  .foot{font-size:0.86rem; color:var(--muted); margin-top:26px; padding-top:20px; border-top:1px solid var(--line);
+    display:flex; gap:10px; align-items:flex-start;}
+  .foot::before{content:""; width:7px; height:7px; margin-top:8px; transform:rotate(45deg);
+    background:var(--good); flex:none;}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">
+      <span class="logo">SA<b>I</b>L</span>
+      <span class="tag">Run a host</span>
+    </div>
+    <a class="back" href="#">← Setup</a>
+  </div>
+
+  <main>
+    <span class="eyebrow">Run a host · Payouts</span>
+    <h1>How your host gets paid</h1>
+    <p class="subtitle">Pick how you receive Lightning payments for the inference you serve. You can change this later — it only affects your payout rail, not how your host is discovered or reached.</p>
+
+    <fieldset>
+      <legend>Payout method</legend>
+
+      <!-- PHOENIXD -->
+      <label class="tier sel" data-tier="phoenixd">
+        <input type="radio" name="payout" value="phoenixd" checked>
+        <span class="dot" aria-hidden="true"></span>
+        <span class="head">
+          <span class="name">phoenixd <span class="mono">— self-custodial node</span></span>
+          <span class="pill">Recommended</span>
+          <span class="info" tabindex="0" role="note" aria-label="About phoenixd">i
+            <span class="tip"><b>Self-custodial, set up for you.</b> A Lightning node runs on this machine and you hold the keys (a 12-word backup). Liquidity is handled automatically — no channels to manage. The trade-offs: you rely on ACINQ as your liquidity provider, and there's a fee on your first payout. Easiest path that still keeps your keys.</span>
+          </span>
+        </span>
+        <p class="blurb">We run a Lightning node for you locally. You keep the keys; no node, channels, or liquidity to manage.</p>
+        <div class="meters">
+          <span class="meter ease"><span class="lbl">Ease</span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span><span class="seg"></span></span>
+          <span class="meter sov"><span class="lbl">Sovereign</span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span><span class="seg"></span></span>
+        </div>
+        <div class="cfg">
+          <div class="auto">On save, SAIL downloads and starts <span class="mono">phoenixd</span>, generates your node, and wires it in. <span class="ok">Nothing to configure.</span></div>
+          <div class="field" style="margin-top:14px;">
+            <label>
+              <input type="checkbox" style="width:auto;">
+              I'll back up the 12-word recovery phrase shown after setup
+              <span class="info" tabindex="0" role="note" aria-label="About the recovery phrase">i
+                <span class="tip"><b>This phrase is your money.</b> It's the only way to recover funds if this machine dies. Write it down offline — SAIL can't recover it for you.</span>
+              </span>
+            </label>
+            <div class="hint">Required before your host goes live.</div>
+          </div>
+        </div>
+      </label>
+
+      <!-- OWN LND -->
+      <label class="tier" data-tier="lnd">
+        <input type="radio" name="payout" value="lnd">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="head">
+          <span class="name">Your own node <span class="mono">— LND</span></span>
+          <span class="pill q">Most sovereign</span>
+          <span class="info" tabindex="0" role="note" aria-label="About connecting your own LND">i
+            <span class="tip"><b>Maximum sovereignty.</b> Connect a Lightning node you already run: your keys, your channels, no single provider who can cut you off. You'll need the node reachable over REST, inbound liquidity to receive, and an invoice-only macaroon. The most setup, and the most unstoppable.</span>
+          </span>
+        </span>
+        <p class="blurb">Connect a node you already operate. No third-party liquidity provider in the path.</p>
+        <div class="meters">
+          <span class="meter ease"><span class="lbl">Ease</span><span class="seg on"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span></span>
+          <span class="meter sov"><span class="lbl">Sovereign</span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span></span>
+        </div>
+        <div class="cfg">
+          <div class="field">
+            <label>REST host</label>
+            <input type="text" placeholder="https://your-node:8080" spellcheck="false">
+          </div>
+          <div class="field">
+            <label>TLS certificate path</label>
+            <input type="text" placeholder="~/.config/sail/lnd/tls.cert" spellcheck="false">
+          </div>
+          <div class="field">
+            <label>Invoice macaroon path
+              <span class="info" tabindex="0" role="note" aria-label="About the macaroon">i
+                <span class="tip"><b>Don't use the admin macaroon.</b> Bake one limited to <span class="mono">invoices:read invoices:write info:read</span>. If the host is ever compromised, the damage is capped at "can issue invoices," not "can drain the node."</span>
+              </span>
+            </label>
+            <input type="text" placeholder="~/.config/sail/lnd/host.macaroon" spellcheck="false">
+            <div class="hint">No inbound liquidity yet? See <a href="#">the host guide</a> — with zero inbound, clients can't pay you.</div>
+          </div>
+        </div>
+      </label>
+
+      <!-- NWC -->
+      <label class="tier" data-tier="nwc">
+        <input type="radio" name="payout" value="nwc">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="head">
+          <span class="name">Connect a wallet <span class="mono">— NWC</span></span>
+          <span class="pill q">Bring your own</span>
+          <span class="info" tabindex="0" role="note" aria-label="About Nostr Wallet Connect">i
+            <span class="tip"><b>Quickest, least sovereign.</b> Connect any wallet that supports Nostr Wallet Connect. It's only as sovereign as that wallet: a custodial provider can freeze your payouts, and a KYC'd wallet can link this host — and your onion address — to your identity. Fine for getting started; harden later.</span>
+          </span>
+        </span>
+        <p class="blurb">Paste a connection string from a wallet you already use (Alby, Coinos, Zeus…).</p>
+        <div class="meters">
+          <span class="meter ease"><span class="lbl">Ease</span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span></span>
+          <span class="meter sov"><span class="lbl">Sovereign</span><span class="seg on"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span></span>
+        </div>
+        <div class="cfg">
+          <div class="field">
+            <label>NWC connection string</label>
+            <input type="text" placeholder="nostr+walletconnect://…" spellcheck="false">
+            <div class="hint">Kept on this machine, never published.</div>
+          </div>
+          <div class="callout">
+            <p class="lead">A custodial wallet can be censored</p>
+            <p>If the wallet you connect holds your funds, its operator can freeze your payouts or, with KYC, tie your earnings to your identity — undoing the anonymity Tor gives your host. Self-custody (phoenixd or your own node) avoids this.</p>
+          </div>
+        </div>
+      </label>
+
+    </fieldset>
+
+    <div class="actions">
+      <button class="btn" type="button">Save payout method</button>
+      <span class="auto">You can switch rails anytime without changing your <span class="mono">.onion</span> or pubkey.</span>
+    </div>
+
+    <p class="foot">Whatever you pick, your host stays discoverable over Nostr and reachable over Tor. Only the payout rail's sovereignty changes — the network can't tell which one you chose.</p>
+  </main>
+
+<script>
+  // Selecting a tier reveals its config; the radio dot doubles as the lit beacon.
+  const tiers = document.querySelectorAll('.tier');
+  function sync(){
+    tiers.forEach(t => {
+      const picked = t.querySelector('input[type=radio]').checked;
+      t.classList.toggle('sel', picked);
+    });
+  }
+  tiers.forEach(t => t.addEventListener('change', sync));
+  // Allow tapping the info icon without selecting the tier (mobile/keyboard).
+  document.querySelectorAll('.info').forEach(i => {
+    i.addEventListener('click', e => e.preventDefault());
+    i.addEventListener('keydown', e => { if(e.key === 'Escape') i.blur(); });
+  });
+  sync();
+</script>
+</body>
+</html>

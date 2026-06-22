@@ -48,7 +48,15 @@ Guiding rule: **get sats flowing through the smallest possible loop before scali
 
 **Ships**
 - Polished reference client (begin migration to **Tauri** per spec).
-- Host onboarding so external GPUs can join.
+- **Host onboarding so external GPUs can join** — the "wallet + GPU and go" track:
+  - ✅ Durable host as a `sail-host` **systemd service** (auto-restart, survives reboot, same onion/pubkey).
+  - ✅ Docs: systemd documented as the **canonical** host setup (README + wiki); manual `uvicorn` demoted to dev-only.
+  - **Tiered payouts** — `phoenixd` default (self-custodial, auto-liquidity), own **LND** (most sovereign), **NWC** (bring-your-own, labeled). Keeps the easy tier self-custodial so "easy" doesn't fight "sovereign."
+  - **One app, two views** (Use / Host); the host runs as a background daemon regardless of which view is open.
+  - **First-run wizard**: detect GPU → pick model → set pricing → choose payout rail (→ seed backup for phoenixd) → go live.
+  - **Host controls**: pause / resume / stop & remove.
+  - **Pubkey-derived two-word aliases** (e.g. `eloquent-cat`) — friendly, unforgeable host identity with no registrar; client recomputes + verifies from the listing pubkey.
+  - **Simultaneous host + client** supported — separate identity per role; self-connection guard.
 - Reputation + bond; **Proof-of-Work on listings** (anti-spam).
 - Redundant spot-check verification (silently re-run a fraction of prompts, compare).
 - Manual verified-host program begins.

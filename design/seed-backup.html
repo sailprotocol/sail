@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Back up your recovery phrase — SAIL host</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0a0e15; --ink-2:#10161f; --ink-3:#161d28;
+    --line:#202a37; --line-faint:rgba(122,143,168,0.08);
+    --fg:#e9eef5; --muted:#8b98aa;
+    --beacon:#f7931a; --beacon-2:#ffb24d; --beacon-deep:#b8690d;
+    --warn-bg:rgba(247,147,26,0.07); --code-bg:#0c1119; --good:#5fb27a; --good-bg:rgba(95,178,122,0.12);
+  }
+  *{box-sizing:border-box;}
+  @media (prefers-reduced-motion: reduce){ *{transition:none !important;} }
+  body{margin:0; background:var(--ink); color:var(--fg);
+    font-family:'Inter',system-ui,sans-serif; line-height:1.6; -webkit-font-smoothing:antialiased;}
+  .mono{font-family:'IBM Plex Mono',monospace;}
+
+  .topbar{height:62px; display:flex; align-items:center; gap:11px; padding:0 22px; border-bottom:1px solid var(--line);}
+  .topbar .logo{font-family:'Bricolage Grotesque'; font-weight:800; font-size:1.2rem;} .topbar .logo b{color:var(--beacon);}
+  .topbar .tag{font-family:'IBM Plex Mono',monospace; font-size:0.6rem; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted);}
+  /* wizard progress */
+  .steps{margin-left:auto; display:flex; gap:7px; align-items:center; font-family:'IBM Plex Mono',monospace;
+    font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted);}
+  .steps b{color:var(--beacon);}
+  @media (max-width:620px){ .steps{display:none;} }
+
+  main{max-width:600px; margin:0 auto; padding:42px 22px 110px;}
+  .eyebrow{font-family:'IBM Plex Mono',monospace; font-size:0.66rem; letter-spacing:0.18em; text-transform:uppercase;
+    color:var(--beacon); display:block; margin-bottom:10px;}
+  h1{font-family:'Bricolage Grotesque'; font-weight:800; font-size:1.85rem; letter-spacing:-0.02em; margin:0 0 8px;}
+  .sub{color:var(--muted); margin:0 0 26px;}
+  strong{color:var(--fg); font-weight:600;}
+
+  .danger{border:1px solid var(--beacon-deep); border-left:3px solid var(--beacon); background:var(--warn-bg);
+    border-radius:11px; padding:16px 18px; margin:0 0 22px;}
+  .danger .lead{font-family:'Bricolage Grotesque'; font-weight:700; color:var(--fg); display:flex; align-items:center; gap:9px; margin-bottom:7px;}
+  .danger .lead::before{content:""; width:9px; height:9px; transform:rotate(45deg); background:var(--beacon); box-shadow:0 0 9px var(--beacon); flex:none;}
+  .danger ul{margin:0; padding-left:20px; font-size:0.9rem;} .danger li{margin-bottom:5px;} .danger li:last-child{margin-bottom:0;}
+
+  /* phrase grid */
+  .phrasewrap{position:relative; border:1px solid var(--line); border-radius:13px; background:var(--ink-2); padding:20px; margin-bottom:8px;}
+  .phrase{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; transition:filter .2s ease;}
+  @media (max-width:480px){ .phrase{grid-template-columns:repeat(2,1fr);} }
+  .phrase.blurred{filter:blur(8px); user-select:none; pointer-events:none;}
+  .word{display:flex; align-items:baseline; gap:9px; background:var(--code-bg); border:1px solid var(--line);
+    border-radius:8px; padding:9px 11px;}
+  .word .i{font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:var(--muted); width:16px; flex:none; text-align:right;}
+  .word .w{font-family:'IBM Plex Mono',monospace; font-size:0.92rem; color:var(--fg);}
+  .cover{position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px;
+    background:rgba(10,14,21,0.55); backdrop-filter:blur(1px); border-radius:13px;}
+  .cover .hint{font-size:0.85rem; color:var(--muted);}
+  .reveal{font-family:'Bricolage Grotesque'; font-weight:700; font-size:0.95rem; border:1px solid var(--beacon);
+    background:var(--beacon); color:#1a0f02; padding:10px 22px; border-radius:9px; cursor:pointer;}
+  .demo{text-align:center; font-size:0.74rem; color:var(--muted); margin:0 0 24px; font-style:italic;}
+
+  /* verify */
+  .verify{border-top:1px solid var(--line); padding-top:24px; opacity:.45; pointer-events:none; transition:opacity .25s ease;}
+  .verify.active{opacity:1; pointer-events:auto;}
+  .verify h3{font-family:'Bricolage Grotesque'; font-weight:700; font-size:1.05rem; margin:0 0 6px;}
+  .verify .vsub{color:var(--muted); font-size:0.88rem; margin:0 0 16px;}
+  .vrow{display:flex; gap:14px; flex-wrap:wrap;}
+  .vfield{flex:1; min-width:140px;}
+  .vfield label{display:block; font-size:0.78rem; color:var(--muted); margin-bottom:6px;}
+  .vfield input{width:100%; background:var(--code-bg); border:1px solid var(--line); border-radius:8px; padding:11px 12px;
+    color:var(--fg); font-family:'IBM Plex Mono',monospace; font-size:0.9rem;}
+  .vfield input:focus{outline:none; border-color:var(--beacon);}
+  .vfield input.ok{border-color:var(--good);}
+  .vfield input.bad{border-color:#c2543f;}
+
+  .actions{margin-top:28px; display:flex; align-items:center; gap:16px; flex-wrap:wrap;}
+  .btn{font-family:'Bricolage Grotesque'; font-weight:700; font-size:1rem; border:none; background:var(--beacon);
+    color:#1a0f02; padding:13px 26px; border-radius:10px; cursor:pointer;}
+  .btn:disabled{background:var(--ink-3); color:var(--muted); cursor:not-allowed;}
+  .btn.ghost{background:var(--ink-3); color:var(--fg); border:1px solid var(--line);}
+  .note{font-size:0.85rem; color:var(--muted); display:flex; gap:8px; align-items:flex-start; margin-top:22px;}
+  .note::before{content:""; width:7px; height:7px; margin-top:7px; transform:rotate(45deg); background:var(--good); flex:none;}
+
+  .info{position:relative; display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px;
+    border-radius:50%; border:1px solid var(--line); color:var(--muted); font-family:'IBM Plex Mono',monospace;
+    font-size:0.66rem; cursor:help; background:var(--ink-3);}
+  .info:hover,.info:focus-visible{border-color:var(--beacon); color:var(--beacon); outline:none;}
+  .info .tip{position:absolute; left:50%; transform:translateX(-50%); bottom:24px; width:240px; z-index:20;
+    background:var(--ink-3); border:1px solid var(--line); border-left:3px solid var(--beacon); border-radius:9px;
+    padding:11px 13px; font-size:0.82rem; line-height:1.5; color:var(--fg); box-shadow:0 12px 30px rgba(0,0,0,.55);
+    opacity:0; visibility:hidden; transition:opacity .15s ease; text-align:left;}
+  .info:hover .tip,.info:focus .tip{opacity:1; visibility:visible;}
+  :focus-visible{outline:2px solid var(--beacon); outline-offset:3px;}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <span class="logo">SA<b>I</b>L</span><span class="tag">Set up hosting</span>
+  <span class="steps">Detect · Model · Pricing · <b>Payout</b> · Live</span>
+</div>
+
+<main>
+  <span class="eyebrow">Payout · phoenixd</span>
+  <h1>Back up your recovery phrase</h1>
+  <p class="sub">phoenixd just created a self-custodial Lightning node on this machine. These 12 words <strong>are</strong> the wallet — write them down before you go live.</p>
+
+  <div class="danger">
+    <div class="lead">This phrase is your money</div>
+    <ul>
+      <li>It's the <strong>only</strong> way to recover your sats if this machine dies or the data is lost.</li>
+      <li><strong>SAIL never sees it</strong> <span class="info" tabindex="0" role="note" aria-label="Where the phrase lives">i<span class="tip">The phrase is generated by phoenixd and stays in <b>~/.phoenix</b> on this machine. It is never sent to SAIL, a relay, or anyone — we can't recover it for you.</span></span> — it stays on this machine. We can't recover it for you.</li>
+      <li>Write it on <strong>paper</strong>, offline. Don't screenshot it, email it, or paste it into any website.</li>
+    </ul>
+  </div>
+
+  <div class="phrasewrap">
+    <div class="phrase blurred" id="phrase" aria-hidden="true">
+      <div class="word"><span class="i">1</span><span class="w">ribbon</span></div>
+      <div class="word"><span class="i">2</span><span class="w">harvest</span></div>
+      <div class="word"><span class="i">3</span><span class="w">velvet</span></div>
+      <div class="word"><span class="i">4</span><span class="w">cabin</span></div>
+      <div class="word"><span class="i">5</span><span class="w">oxygen</span></div>
+      <div class="word"><span class="i">6</span><span class="w">puzzle</span></div>
+      <div class="word"><span class="i">7</span><span class="w">anchor</span></div>
+      <div class="word"><span class="i">8</span><span class="w">meadow</span></div>
+      <div class="word"><span class="i">9</span><span class="w">signal</span></div>
+      <div class="word"><span class="i">10</span><span class="w">copper</span></div>
+      <div class="word"><span class="i">11</span><span class="w">lunar</span></div>
+      <div class="word"><span class="i">12</span><span class="w">garden</span></div>
+    </div>
+    <div class="cover" id="cover">
+      <span class="hint">Make sure no one can see your screen</span>
+      <button class="reveal" id="revealBtn">Reveal phrase</button>
+    </div>
+  </div>
+  <p class="demo">Example phrase — your real one will be different and shown only once.</p>
+
+  <div class="verify" id="verify">
+    <h3>Confirm you wrote it down</h3>
+    <p class="vsub">Type two of the words to continue. This is the last time the full phrase is shown.</p>
+    <div class="vrow">
+      <div class="vfield">
+        <label for="v4">Word #4</label>
+        <input id="v4" type="text" autocomplete="off" spellcheck="false" data-answer="cabin">
+      </div>
+      <div class="vfield">
+        <label for="v9">Word #9</label>
+        <input id="v9" type="text" autocomplete="off" spellcheck="false" data-answer="signal">
+      </div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn" id="continueBtn" disabled>I've saved it — continue</button>
+    <button class="btn ghost" id="reshow" style="display:none;">Show phrase again</button>
+  </div>
+
+  <p class="note">You can keep hosting with the <span class="mono">phoenixd</span> wallet, move funds out anytime over Lightning, or restore this exact wallet on another machine with these 12 words.</p>
+</main>
+
+<script>
+  const phrase=document.getElementById('phrase'), cover=document.getElementById('cover'),
+        verify=document.getElementById('verify'), cont=document.getElementById('continueBtn'),
+        reshow=document.getElementById('reshow');
+  let revealed=false;
+
+  document.getElementById('revealBtn').onclick=()=>{
+    phrase.classList.remove('blurred'); phrase.setAttribute('aria-hidden','false');
+    cover.style.display='none'; verify.classList.add('active'); revealed=true;
+    document.getElementById('v4').focus();
+  };
+
+  const v4=document.getElementById('v4'), v9=document.getElementById('v9');
+  function check(){
+    let pass=true;
+    [v4,v9].forEach(inp=>{
+      const val=inp.value.trim().toLowerCase();
+      if(!val){ inp.classList.remove('ok','bad'); pass=false; return; }
+      const good = val===inp.dataset.answer;
+      inp.classList.toggle('ok',good); inp.classList.toggle('bad',!good);
+      if(!good) pass=false;
+    });
+    cont.disabled=!pass;
+  }
+  v4.addEventListener('input',check); v9.addEventListener('input',check);
+
+  cont.onclick=()=>{
+    // wizard would advance to "go live" here; demo just locks the phrase away
+    phrase.classList.add('blurred'); verify.classList.remove('active');
+    cont.textContent='Saved ✓'; cont.disabled=true; reshow.style.display='none';
+    document.querySelector('main h1').textContent='Recovery phrase saved';
+    document.querySelector('.sub').innerHTML='Your wallet is backed up. Next: <strong>go live</strong> and publish your listing.';
+  };
+</script>
+</body>
+</html>
