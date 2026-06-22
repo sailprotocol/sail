@@ -55,6 +55,8 @@ client, relays). See `ROADMAP.md` for phases.
 - **Mainnet host (canonical):** runs as the `sail-host` **systemd service** — durable, auto-restart, same onion/pubkey across reboots. The manual `uvicorn` line above is for dev/regtest. Manage with `sudo systemctl {start,stop,restart} sail-host`; logs via `journalctl -u sail-host -f`. Host receive backend is selected by `PAYMENTS` — `phoenixd` (recommended), `lnd`, or `mock`.
 - Client CLI (regtest LND): `ENV_FILE=.env.client PYTHONPATH=. .venv/bin/python -m client.cli "your prompt"`
 - Client GUI (local web app): `ENV_FILE=.env.client PYTHONPATH=. .venv/bin/uvicorn client.webapp:app --port 8080` → open `http://127.0.0.1:8080`. CLI + GUI share `client/core.py`. (Tauri/desktop packaging deferred to a later task.)
+- **Operator surfaces (LOCAL ONLY):** the host daemon serves a read-only dashboard at `/` and a first-run setup wizard at `/setup` (`host/static/`), both gated to non-`.onion` Host headers so they never leak over Tor. The wizard (detect → model → pricing → payout → seed → go-live) writes `.env.host` via `host/config_writer.py` and provisions phoenixd via `host/phoenixd_setup.py`. Only the **phoenixd** payout tier is wired in setup so far (lnd/nwc deferred).
+- **Service control / restart:** the daemon runs unprivileged, so config-writer/go-live try `sudo -n systemctl restart sail-host` and otherwise surface the command to run. Install `deploy/sail-sudoers.example` → `/etc/sudoers.d/sail` for the one-click path (narrow scope: service control only). phoenixd provisioning surfaces its `/etc/systemd/system` unit-install commands for a manual `sudo` step.
 
 ## Conventions
 - Keep backends behind their interfaces (`LightningBackend`, `ModelBackend`); select via env vars.

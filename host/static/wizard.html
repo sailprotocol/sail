@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up hosting — SAIL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0a0e15; --ink-2:#10161f; --ink-3:#161d28;
+    --line:#202a37; --line-faint:rgba(122,143,168,0.08);
+    --fg:#e9eef5; --muted:#8b98aa;
+    --beacon:#f7931a; --beacon-2:#ffb24d; --beacon-deep:#b8690d;
+    --warn-bg:rgba(247,147,26,0.07); --code-bg:#0c1119; --good:#5fb27a; --good-bg:rgba(95,178,122,0.12); --bad:#f85149;
+  }
+  *{box-sizing:border-box;}
+  @media (prefers-reduced-motion: reduce){ *{transition:none !important; animation:none !important;} }
+  body{margin:0; background:var(--ink); color:var(--fg); font-family:'Inter',system-ui,sans-serif; line-height:1.6; -webkit-font-smoothing:antialiased;}
+  .mono{font-family:'IBM Plex Mono',monospace;} strong{color:var(--fg); font-weight:600;}
+  a{color:var(--beacon);}
+
+  .topbar{height:62px; display:flex; align-items:center; gap:12px; padding:0 22px; border-bottom:1px solid var(--line);}
+  .logo{font-family:'Bricolage Grotesque'; font-weight:800; font-size:1.2rem;} .logo b{color:var(--beacon);}
+  .tag{font-family:'IBM Plex Mono',monospace; font-size:0.6rem; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted);}
+  .rail{display:flex; gap:6px; align-items:center; margin-left:auto; font-family:'IBM Plex Mono',monospace; font-size:0.62rem; letter-spacing:0.06em; text-transform:uppercase;}
+  .rail .s{color:var(--muted); display:flex; align-items:center; gap:6px;}
+  .rail .s .n{width:18px; height:18px; border:1px solid var(--line); border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:0.6rem;}
+  .rail .s.on{color:var(--beacon);} .rail .s.on .n{border-color:var(--beacon); color:var(--beacon);}
+  .rail .s.done .n{background:var(--good); border-color:var(--good); color:#08120c;}
+  .rail .sep{color:var(--line);}
+  @media (max-width:720px){ .rail .lbl{display:none;} }
+
+  main{max-width:620px; margin:0 auto; padding:40px 22px;}
+  .eyebrow{font-family:'IBM Plex Mono',monospace; font-size:0.66rem; letter-spacing:0.18em; text-transform:uppercase; color:var(--beacon); display:block; margin-bottom:9px;}
+  h1{font-family:'Bricolage Grotesque'; font-weight:800; font-size:1.7rem; letter-spacing:-0.02em; margin:0 0 7px;}
+  .sub{color:var(--muted); margin:0 0 24px;}
+  .panel{display:none;} .panel.on{display:block;}
+
+  .check{display:flex; align-items:center; gap:13px; border:1px solid var(--line); background:var(--ink-2); border-radius:11px; padding:14px 16px; margin-bottom:10px;}
+  .check .ico{width:24px; height:24px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-size:0.8rem; font-weight:700;}
+  .check.ok .ico{background:var(--good-bg); color:var(--good);}
+  .check.warn .ico{background:var(--warn-bg); color:var(--beacon);}
+  .check.scan .ico{background:var(--ink-3); color:var(--muted);}
+  .check .body{flex:1; min-width:0;} .check .t{font-weight:600;} .check .d{font-size:0.85rem; color:var(--muted);} .check .d.mono{color:var(--fg);}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .spinner{width:16px; height:16px; border:2px solid var(--line); border-top-color:var(--beacon); border-radius:50%; animation:spin .8s linear infinite; display:inline-block; vertical-align:middle;}
+
+  .opt{position:relative; display:block; border:1px solid var(--line); background:var(--ink-2); border-radius:11px; padding:14px 16px 14px 48px; margin-bottom:10px; cursor:pointer; transition:border-color .15s, background .15s;}
+  .opt:hover{border-color:#2c3a4b;} .opt input{position:absolute; opacity:0;}
+  .opt .dot{position:absolute; left:16px; top:16px; width:16px; height:16px; border-radius:50%; border:2px solid var(--line);}
+  .opt.sel{border-color:var(--beacon); background:#13192180;} .opt.sel .dot{border-color:var(--beacon); background:var(--beacon); box-shadow:0 0 9px var(--beacon);}
+  .opt.disabled{opacity:.5; cursor:not-allowed;} .opt.disabled:hover{border-color:var(--line);}
+  .opt .name{font-weight:600;} .opt .meta{font-size:0.85rem; color:var(--muted); margin-top:2px;}
+  .opt .pill{position:absolute; right:16px; top:15px;}
+  .pill{display:inline-block; font-family:'IBM Plex Mono',monospace; font-size:0.6rem; letter-spacing:0.08em; text-transform:uppercase; border:1px solid var(--beacon-deep); color:var(--beacon); border-radius:999px; padding:3px 9px;}
+  .pill.good{border-color:var(--good); color:var(--good);} .pill.q{border-color:var(--line); color:var(--muted);} .pill.bad{border-color:var(--bad); color:var(--bad);}
+
+  .meters{display:flex; gap:18px; margin-top:11px;}
+  .meter{display:inline-flex; align-items:center; gap:6px;}
+  .meter .lbl{font-family:'IBM Plex Mono',monospace; font-size:0.56rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);}
+  .meter .seg{width:11px; height:5px; border-radius:2px; background:var(--ink-3);} .meter .seg.on{background:var(--beacon);} .meter.sov .seg.on{background:var(--good);}
+
+  .field{margin-bottom:15px;} .field label{display:flex; gap:7px; align-items:center; font-size:0.82rem; color:var(--muted); margin-bottom:6px;}
+  .field .input{display:flex; align-items:center; gap:8px;}
+  .field input{flex:1; background:var(--code-bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:var(--fg); font-family:'IBM Plex Mono',monospace; font-size:0.88rem;}
+  .field input:focus{outline:none; border-color:var(--beacon);} .field .unit{font-size:0.82rem; color:var(--muted);}
+  .est{background:var(--ink-2); border:1px solid var(--line); border-radius:10px; padding:12px 15px; font-size:0.88rem; color:var(--muted);}
+  .est b{color:var(--beacon); font-family:'IBM Plex Mono',monospace;}
+  .pullbox{margin-top:10px; padding:14px 16px; border:1px solid var(--line); border-radius:11px; background:var(--ink-2);}
+  .pulllog{font-family:'IBM Plex Mono',monospace; font-size:0.76rem; color:var(--muted); margin-top:8px; max-height:90px; overflow:auto; white-space:pre-wrap;}
+
+  .phrasewrap{position:relative; border:1px solid var(--line); border-radius:12px; background:var(--ink-2); padding:16px; margin:0 0 8px;}
+  .phrase{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; transition:filter .2s;}
+  @media (max-width:460px){ .phrase{grid-template-columns:repeat(2,1fr);} }
+  .phrase.blurred{filter:blur(8px); user-select:none; pointer-events:none;}
+  .word{display:flex; gap:7px; align-items:baseline; background:var(--code-bg); border:1px solid var(--line); border-radius:7px; padding:7px 9px;}
+  .word .i{font-family:'IBM Plex Mono',monospace; font-size:0.66rem; color:var(--muted); width:15px; text-align:right;}
+  .word .w{font-family:'IBM Plex Mono',monospace; font-size:0.86rem;}
+  .cover{position:absolute; inset:0; display:flex; flex-direction:column; gap:10px; align-items:center; justify-content:center; background:rgba(10,14,21,0.6); border-radius:12px;}
+  .danger{border:1px solid var(--beacon-deep); border-left:3px solid var(--beacon); background:var(--warn-bg); border-radius:10px; padding:13px 15px; margin:0 0 16px; font-size:0.88rem;}
+  .danger b{color:var(--beacon-2);}
+  .verify{border-top:1px solid var(--line); margin-top:16px; padding-top:16px; opacity:.45; pointer-events:none; transition:opacity .25s;}
+  .verify.active{opacity:1; pointer-events:auto;}
+  .vrow{display:flex; gap:14px; flex-wrap:wrap;} .vfield{flex:1; min-width:140px;}
+  .vfield label{display:block; font-size:0.78rem; color:var(--muted); margin-bottom:6px;}
+  .vfield input{width:100%; background:var(--code-bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:var(--fg); font-family:'IBM Plex Mono',monospace;}
+  .vfield input:focus{outline:none; border-color:var(--beacon);} .vfield input.ok{border-color:var(--good);} .vfield input.bad{border-color:var(--bad);}
+
+  .summary{border:1px solid var(--line); background:var(--ink-2); border-radius:12px; padding:8px 18px; margin-bottom:18px;}
+  .sumrow{display:flex; justify-content:space-between; padding:11px 0; border-bottom:1px solid var(--line-faint); font-size:0.9rem;}
+  .sumrow:last-child{border-bottom:none;} .sumrow .k{color:var(--muted);}
+  .livecard{border:1px solid var(--beacon-deep); background:linear-gradient(180deg,#1a1408,var(--ink-2)); border-radius:14px; padding:24px; text-align:center;}
+  .beacon{width:18px; height:18px; border-radius:50%; background:var(--beacon); margin:0 auto 14px; position:relative; box-shadow:0 0 14px var(--beacon);}
+  .beacon::after{content:""; position:absolute; inset:-8px; border-radius:50%; border:2px solid var(--beacon); animation:pulse 2.2s ease-out infinite;}
+  @keyframes pulse{0%{transform:scale(.6); opacity:.9;} 100%{transform:scale(1.9); opacity:0;}}
+  .livecard h2{font-family:'Bricolage Grotesque'; font-weight:800; font-size:1.5rem; margin:0 0 4px;}
+  .livecard .alias{font-family:'IBM Plex Mono',monospace; color:var(--beacon-2); font-size:1rem; margin-bottom:16px;}
+  .livecard .row{display:flex; justify-content:space-between; font-size:0.84rem; padding:8px 0; border-top:1px solid var(--line-faint); text-align:left;}
+  .livecard .row .mono{color:var(--fg); max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+
+  .note{font-size:0.85rem; border:1px solid var(--line); border-radius:10px; padding:11px 14px; margin-top:12px; color:var(--muted);}
+  .note.bad{border-color:var(--bad); color:#ffb3ad;} .note .mono{color:var(--fg);}
+  .nav{display:flex; gap:12px; align-items:center; margin-top:26px; padding-top:20px; border-top:1px solid var(--line);}
+  .btn{font-family:'Bricolage Grotesque'; font-weight:700; font-size:0.98rem; border:none; background:var(--beacon); color:#1a0f02; padding:12px 24px; border-radius:9px; cursor:pointer;}
+  .btn:disabled{background:var(--ink-3); color:var(--muted); cursor:not-allowed;}
+  .btn.ghost{background:var(--ink-3); color:var(--fg); border:1px solid var(--line);} .btn.ghost:hover{border-color:var(--beacon);}
+  .btn.sm{font-size:0.82rem; padding:8px 16px;}
+  .nav .spacer{flex:1;}
+  .info{position:relative; display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; border-radius:50%; border:1px solid var(--line); color:var(--muted); font-family:'IBM Plex Mono',monospace; font-size:0.62rem; cursor:help; background:var(--ink-3);}
+  .info:hover{border-color:var(--beacon); color:var(--beacon);}
+  .info .tip{position:absolute; left:50%; transform:translateX(-50%); bottom:23px; width:230px; z-index:20; background:var(--ink-3); border:1px solid var(--line); border-left:3px solid var(--beacon); border-radius:8px; padding:10px 12px; font-size:0.8rem; line-height:1.5; color:var(--fg); box-shadow:0 12px 30px rgba(0,0,0,.55); opacity:0; visibility:hidden; transition:opacity .15s;}
+  .info:hover .tip{opacity:1; visibility:visible;}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <span class="logo">SA<b>I</b>L</span><span class="tag">Set up hosting</span>
+  <div class="rail" id="rail"></div>
+</div>
+
+<main>
+  <!-- DETECT -->
+  <section class="panel on" data-step="detect">
+    <span class="eyebrow">Step 1 · Detect</span>
+    <h1>Checking your machine</h1>
+    <p class="sub">Confirming you have what it takes to serve inference. This runs once.</p>
+    <div id="checks">
+      <div class="check scan"><span class="ico"><span class="spinner"></span></span><div class="body"><div class="t">GPU</div><div class="d">scanning…</div></div></div>
+      <div class="check scan"><span class="ico"><span class="spinner"></span></span><div class="body"><div class="t">Ollama</div><div class="d">scanning…</div></div></div>
+      <div class="check scan"><span class="ico"><span class="spinner"></span></span><div class="body"><div class="t">Tor</div><div class="d">scanning…</div></div></div>
+    </div>
+  </section>
+
+  <!-- MODEL -->
+  <section class="panel" data-step="model">
+    <span class="eyebrow">Step 2 · Model</span>
+    <h1>Which model do you want to serve?</h1>
+    <p class="sub">Pulled from your local Ollama. Clients will see this model on your listing.</p>
+    <div id="modelopts"></div>
+    <div class="pullbox" id="pullbox" style="display:none;">
+      <div class="field" style="margin:0;"><label>Model name to pull</label><div class="input"><input id="pullname" placeholder="e.g. llama3.1:8b" spellcheck="false"><button class="btn ghost sm" id="pullBtn">Pull</button></div></div>
+      <div class="pulllog" id="pulllog"></div>
+    </div>
+  </section>
+
+  <!-- PRICING -->
+  <section class="panel" data-step="pricing">
+    <span class="eyebrow">Step 3 · Pricing</span>
+    <h1>Set your price</h1>
+    <p class="sub">You earn this per output token. Defaults are sensible — tune later anytime.</p>
+    <div class="field"><label>Price per token</label><div class="input"><input value="1" id="price"><span class="unit">sat / token</span></div></div>
+    <div class="field"><label>Chunk size <span class="info" tabindex="0">i<span class="tip">Tokens sold per micro-payment. Smaller = client overpays less if they stop early; larger = fewer payment round-trips.</span></span></label><div class="input"><input value="8" id="chunk"><span class="unit">tokens</span></div></div>
+    <div class="field"><label>Invoice expiry</label><div class="input"><input value="300" id="expiry"><span class="unit">seconds</span></div></div>
+    <div class="est">At this price, <b id="estv">1,000,000 sat</b> per million tokens served.</div>
+    <div class="note bad" id="pricingerr" style="display:none;"></div>
+  </section>
+
+  <!-- PAYOUT -->
+  <section class="panel" data-step="payout">
+    <span class="eyebrow">Step 4 · Payout</span>
+    <h1>How do you get paid?</h1>
+    <p class="sub">Only your payout rail's sovereignty changes — discovery + reachability stay sovereign regardless.</p>
+    <label class="opt sel" data-pay="phoenixd"><input type="radio" name="pay" checked><span class="dot"></span><span class="name">phoenixd <span class="mono" style="color:var(--beacon-2);font-weight:400">— self-custodial</span></span><span class="meta">We run a node for you. You hold the keys; no channels to manage.</span><span class="pill">Recommended</span>
+      <div class="meters"><span class="meter"><span class="lbl">Ease</span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span><span class="seg"></span></span><span class="meter sov"><span class="lbl">Sov</span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span><span class="seg"></span></span></div>
+    </label>
+    <label class="opt disabled" data-pay="lnd"><input type="radio" name="pay" disabled><span class="dot"></span><span class="name">Your own node <span class="mono" style="color:var(--beacon-2);font-weight:400">— LND</span></span><span class="meta">Connect a node you run. Most sovereign; most setup.</span><span class="pill q">Soon</span></label>
+    <label class="opt disabled" data-pay="nwc"><input type="radio" name="pay" disabled><span class="dot"></span><span class="name">Connect a wallet <span class="mono" style="color:var(--beacon-2);font-weight:400">— NWC</span></span><span class="meta">As sovereign as the wallet — a custodial one can freeze or deanonymize you.</span><span class="pill q">Soon</span></label>
+    <div class="note" id="payoutnote">phoenixd is the wired tier today — your own LND and NWC wallets land in a later step. Choosing phoenixd downloads + starts a self-custodial node and shows your recovery phrase next.</div>
+  </section>
+
+  <!-- SEED (phoenixd only) -->
+  <section class="panel" data-step="seed">
+    <span class="eyebrow">Step 4b · Back up</span>
+    <h1>Back up your recovery phrase</h1>
+    <div class="danger"><b>This phrase is your money.</b> The only way to recover funds — SAIL never sees it (stays in <span class="mono">~/.phoenix</span>). Write it on paper, offline.</div>
+    <div class="phrasewrap">
+      <div class="phrase blurred" id="ph"></div>
+      <div class="cover" id="seedcover"><span class="meta" style="color:var(--muted);font-size:0.85rem">Make sure no one can see your screen</span><button class="btn" id="revealBtn">Reveal phrase</button></div>
+    </div>
+    <div class="verify" id="verify">
+      <p class="sub" style="margin:0 0 12px; font-size:0.88rem;">Confirm you wrote it down — type these two words. This is the last time the full phrase is shown.</p>
+      <div class="vrow">
+        <div class="vfield"><label id="lbl-a">Word #?</label><input id="v-a" autocomplete="off" spellcheck="false"></div>
+        <div class="vfield"><label id="lbl-b">Word #?</label><input id="v-b" autocomplete="off" spellcheck="false"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LIVE -->
+  <section class="panel" data-step="live">
+    <span class="eyebrow">Step 5 · Go live</span>
+    <h1 id="liveh">Ready to go live</h1>
+    <div id="presummary">
+      <div class="summary" id="sumbox"></div>
+      <p class="sub">Going live starts the <span class="mono">sail-host</span> service, creates your onion, and publishes your signed listing to your relays.</p>
+    </div>
+    <div id="livebusy" style="display:none;"><div class="check scan"><span class="ico"><span class="spinner"></span></span><div class="body"><div class="t" id="busyt">Starting your host…</div><div class="d" id="busyd">restarting the service and creating your onion</div></div></div></div>
+    <div class="note" id="manualrestart" style="display:none;"></div>
+    <div id="livedone" style="display:none;">
+      <div class="livecard">
+        <div class="beacon"></div>
+        <h2>You're live</h2>
+        <div class="alias" id="alias">—</div>
+        <div class="row"><span style="color:var(--muted)">Onion</span><span class="mono" id="l-onion">—</span></div>
+        <div class="row"><span style="color:var(--muted)">Pubkey</span><span class="mono" id="l-pub">—</span></div>
+        <div class="row"><span style="color:var(--muted)">Self-test</span><span id="l-test"><span class="pill q">checking…</span></span></div>
+        <div class="row"><span style="color:var(--muted)">Listing</span><span><span class="pill good">published on launch</span></span></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="nav">
+    <button class="btn ghost" id="backBtn" style="visibility:hidden;">Back</button>
+    <div class="spacer"></div>
+    <button class="btn" id="nextBtn" disabled>Next</button>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const api = (p,opt) => fetch(p,opt).then(r=>r.json());
+const RAIL=[['detect','Detect'],['model','Model'],['pricing','Pricing'],['payout','Payout'],['live','Live']];
+let idx=0, detectDone=false, payout={tier:'phoenixd'}, seedWords=null, seedVerified=false, vpos=[0,0];
+
+function payTier(){ return document.querySelector('.opt[data-pay].sel')?.dataset.pay || 'phoenixd'; }
+function steps(){
+  const base=['detect','model','pricing','payout'];
+  if(payTier()==='phoenixd') base.push('seed');
+  base.push('live'); return base;
+}
+const panels=[...document.querySelectorAll('.panel')];
+const backBtn=$('backBtn'), nextBtn=$('nextBtn');
+
+function railRender(cur){
+  const order=steps(); const railEl=$('rail'); railEl.innerHTML='';
+  RAIL.forEach(([k,lbl],i)=>{
+    const reached = order.indexOf(k)>-1 && order.indexOf(k)<order.indexOf(cur);
+    const isOn = k===cur || (cur==='seed'&&k==='payout');
+    const s=document.createElement('span'); s.className='s'+(isOn?' on':'')+(reached?' done':'');
+    s.innerHTML=`<span class="n">${reached?'✓':i+1}</span><span class="lbl">${lbl}</span>`;
+    railEl.appendChild(s);
+    if(i<RAIL.length-1){const sep=document.createElement('span'); sep.className='sep'; sep.textContent='·'; railEl.appendChild(sep);}
+  });
+}
+function show(){
+  const order=steps(); const cur=order[idx];
+  panels.forEach(p=>p.classList.toggle('on', p.dataset.step===cur));
+  backBtn.style.visibility = (idx===0||cur==='live') ? 'hidden':'visible';
+  nextBtn.textContent = cur==='live' ? 'Go live'
+    : (cur==='payout' && payTier()==='phoenixd' ? 'Next: set up node'
+    : (cur==='pricing' ? 'Next: payout' : 'Next'));
+  if(cur==='live') buildSummary();
+  railRender(cur); validate();
+}
+function validate(){
+  const cur=steps()[idx]; let ok=true;
+  if(cur==='detect') ok=detectDone;
+  if(cur==='payout') ok = payTier()==='phoenixd';
+  if(cur==='seed') ok=seedVerified;
+  nextBtn.disabled=!ok;
+}
+nextBtn.onclick=async ()=>{
+  const order=steps(); const cur=order[idx];
+  if(cur==='model'){ if(!await saveModel()) return; }
+  if(cur==='pricing'){ if(!await savePricing()) return; }
+  if(cur==='payout'){ if(!await setupPayout()) return; }   // provisions phoenixd, fills seed step
+  if(cur==='live'){ goLive(); return; }
+  if(idx<order.length-1){ idx++; show(); }
+};
+backBtn.onclick=()=>{ if(idx>0){ idx--; show(); } };
+
+// ---- Step 1: detect ----
+(async function detect(){
+  let d; try{ d=await api('/api/setup/detect'); }catch{ d=null; }
+  const c=$('checks'); c.innerHTML='';
+  const rows = d ? [['GPU',d.gpu],['Ollama',d.ollama],['Tor',d.tor]]
+                 : [['GPU',{ok:false,detail:'detection failed'}],['Ollama',{ok:false,detail:'detection failed'}],['Tor',{ok:false,detail:'detection failed'}]];
+  rows.forEach(([t,r])=>{
+    const el=document.createElement('div'); el.className='check '+(r.ok?'ok':'warn');
+    el.innerHTML=`<span class="ico">${r.ok?'✓':'!'}</span><div class="body"><div class="t">${t}</div><div class="d mono">${r.detail}</div></div>`;
+    c.appendChild(el);
+  });
+  renderModels((d&&d.models)||[]);
+  detectDone=true; validate();
+})();
+
+// ---- Step 2: model ----
+function fmtSize(b){ return b? (b/1e9).toFixed(1)+' GB' : ''; }
+function renderModels(models){
+  const box=$('modelopts'); box.innerHTML='';
+  models.forEach((m,i)=>{
+    const el=document.createElement('label'); el.className='opt'+(i===0?' sel':'');
+    el.dataset.model=m.name;
+    el.innerHTML=`<input type="radio" name="model" ${i===0?'checked':''}><span class="dot"></span><span class="name mono">${m.name}</span><span class="meta">${fmtSize(m.size)}</span><span class="pill good">ready</span>`;
+    box.appendChild(el);
+  });
+  const pull=document.createElement('label'); pull.className='opt'+(models.length?'':' sel'); pull.dataset.model='__pull__';
+  pull.innerHTML=`<input type="radio" name="model" ${models.length?'':'checked'}><span class="dot"></span><span class="name">Pull a different model…</span><span class="meta">download from the Ollama library</span>`;
+  box.appendChild(pull);
+  box.querySelectorAll('input[name="model"]').forEach(r=>r.addEventListener('change',onModelPick));
+  onModelPick();
+}
+function onModelPick(){
+  document.querySelectorAll('#modelopts .opt').forEach(o=>o.classList.toggle('sel', o.querySelector('input').checked));
+  $('pullbox').style.display = (selectedModel()==='__pull__') ? 'block':'none';
+}
+function selectedModel(){ return document.querySelector('#modelopts .opt.sel')?.dataset.model; }
+$('pullBtn').onclick=async ()=>{
+  const name=$('pullname').value.trim(); if(!name) return;
+  const log=$('pulllog'); log.textContent='pulling '+name+'…\n'; $('pullBtn').disabled=true;
+  try{
+    const res=await fetch('/api/setup/pull',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name})});
+    const rd=res.body.getReader(), dec=new TextDecoder(); let buf='';
+    while(true){ const {value,done}=await rd.read(); if(done) break; buf+=dec.decode(value,{stream:true});
+      const lines=buf.split('\n'); buf=lines.pop();
+      for(const ln of lines){ if(!ln) continue; try{ const j=JSON.parse(ln); log.textContent+=(j.status||JSON.stringify(j))+'\n'; log.scrollTop=log.scrollHeight; }catch{} } }
+    log.textContent+='done — '+name+' is ready.\n';
+    const ms=(await api('/api/setup/models')).models||[]; renderModels(ms);
+    const sel=document.querySelector(`#modelopts .opt[data-model="${CSS.escape(name)}"] input`); if(sel){ sel.checked=true; onModelPick(); }
+  }catch(e){ log.textContent+='pull failed: '+e+'\n'; }
+  $('pullBtn').disabled=false;
+};
+async function saveModel(){
+  const name=selectedModel();
+  if(!name || name==='__pull__'){ alert('Pick a model (or pull one) first.'); return false; }
+  const r=await api('/api/setup/model',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name})});
+  if(r.error){ alert(r.error); return false; }
+  payout.model=name; return true;
+}
+
+// ---- Step 3: pricing ----
+$('price').addEventListener('input',()=>{ const v=parseFloat($('price').value)||0; $('estv').textContent=(v*1e6).toLocaleString()+' sat'; });
+async function savePricing(){
+  const body={price_sat:parseFloat($('price').value), chunk:parseInt($('chunk').value,10), expiry:parseInt($('expiry').value,10)};
+  const r=await api('/api/setup/pricing',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  if(r.error){ $('pricingerr').textContent=r.error; $('pricingerr').style.display='block'; return false; }
+  $('pricingerr').style.display='none'; payout.price=body; return true;
+}
+
+// ---- Step 4: payout ----
+document.querySelectorAll('.opt[data-pay]').forEach(o=>o.addEventListener('change',()=>{
+  if(o.classList.contains('disabled')) return;
+  document.querySelectorAll('.opt[data-pay]').forEach(x=>x.classList.toggle('sel', x.querySelector('input').checked));
+  show();
+}));
+async function setupPayout(){
+  if(payTier()!=='phoenixd'){ return false; }
+  nextBtn.disabled=true; nextBtn.textContent='Setting up node…';
+  $('payoutnote').innerHTML='<span class="spinner"></span> Downloading & starting phoenixd, generating your wallet… (first run can take a moment)';
+  const r=await api('/api/setup/payout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tier:'phoenixd'})});
+  if(r.error){ $('payoutnote').className='note bad'; $('payoutnote').textContent='Setup failed: '+r.error; nextBtn.textContent='Retry'; nextBtn.disabled=false; return false; }
+  seedWords=r.seed_words; fillSeed(seedWords);
+  return true;
+}
+
+// ---- Step 4b: seed ----
+function fillSeed(words){
+  const g=$('ph'); g.innerHTML='';
+  words.forEach((w,i)=>{ const el=document.createElement('div'); el.className='word'; el.innerHTML=`<span class="i">${i+1}</span><span class="w">${w}</span>`; g.appendChild(el); });
+  // two distinct random positions to verify
+  let a=Math.floor(Math.random()*words.length), b; do{ b=Math.floor(Math.random()*words.length); }while(b===a);
+  vpos=[a,b]; $('lbl-a').textContent='Word #'+(a+1); $('lbl-b').textContent='Word #'+(b+1);
+  $('v-a').value=''; $('v-b').value=''; seedVerified=false;
+}
+$('revealBtn').onclick=()=>{ $('ph').classList.remove('blurred'); $('seedcover').style.display='none'; $('verify').classList.add('active'); $('v-a').focus(); };
+function checkSeed(){
+  let pass=true;
+  [['v-a',vpos[0]],['v-b',vpos[1]]].forEach(([id,pos])=>{
+    const inp=$(id), val=inp.value.trim().toLowerCase();
+    if(!val){ inp.classList.remove('ok','bad'); pass=false; return; }
+    const good = seedWords && val===seedWords[pos];
+    inp.classList.toggle('ok',good); inp.classList.toggle('bad',!good); if(!good) pass=false;
+  });
+  seedVerified=pass; validate();
+}
+$('v-a').addEventListener('input',checkSeed); $('v-b').addEventListener('input',checkSeed);
+
+// ---- Step 5: live ----
+function buildSummary(){
+  const t=payout.price||{}; const rail = payTier();
+  $('sumbox').innerHTML=
+    `<div class="sumrow"><span class="k">Model</span><span class="mono">${payout.model||selectedModel()||'—'}</span></div>`+
+    `<div class="sumrow"><span class="k">Price</span><span><span class="mono">${$('price').value}</span> sat/token · chunk <span class="mono">${$('chunk').value}</span></span></div>`+
+    `<div class="sumrow"><span class="k">Payout</span><span>${rail} <span class="pill good">self-custodial</span></span></div>`+
+    `<div class="sumrow"><span class="k">Transport</span><span>Tor onion (created on launch)</span></div>`;
+}
+async function goLive(){
+  $('presummary').style.display='none'; $('livebusy').style.display='block';
+  nextBtn.disabled=true; nextBtn.textContent='Going live…'; backBtn.style.visibility='hidden';
+  let res=null; try{ res=await api('/api/setup/golive',{method:'POST'}); }catch{ /* restart may drop the connection */ }
+  if(res && res.restart_required){
+    $('manualrestart').style.display='block';
+    $('manualrestart').innerHTML=`Almost there — run this to start your host, then this page will finish automatically:<br><span class="mono">${res.command}</span>`;
+  }
+  pollLive();
+}
+async function pollLive(){
+  for(let i=0;i<150;i++){           // ~5 min budget
+    await new Promise(r=>setTimeout(r,2000));
+    let st=null; try{ st=await api('/api/status'); }catch{ continue; }
+    if(st && !st.error && st.state==='live'){ return liveDone(st); }
+  }
+}
+async function liveDone(st){
+  $('livebusy').style.display='none'; $('manualrestart').style.display='none'; $('livedone').style.display='block';
+  $('liveh').textContent='Your host is live';
+  const pub=st.pubkey||''; $('alias').textContent='host · '+pub.slice(-4)+'   (alias coming soon)';
+  $('l-onion').textContent=st.onion; $('l-pub').textContent=pub.slice(0,8)+'…'+pub.slice(-6);
+  try{ const t=await api('/api/selftest'); $('l-test').innerHTML = t.ok? '<span class="pill good">● 402 passing</span>' : '<span class="pill bad">● failed</span>'; }
+  catch{ $('l-test').innerHTML='<span class="pill q">unavailable</span>'; }
+  nextBtn.disabled=false; nextBtn.textContent='Open dashboard'; nextBtn.onclick=()=>{ window.location='/'; };
+}
+
+show();
+</script>
+</body>
+</html>

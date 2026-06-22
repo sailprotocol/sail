@@ -1,0 +1,17 @@
+# SAIL host — optional one-click service control.
+#
+# The host daemon runs as an unprivileged user, but `sail-host` (and `phoenixd`) are SYSTEM
+# units, so controlling them needs root. Without this file the setup wizard / config-writer still
+# work — they just surface the `sudo systemctl …` command for you to run. Install this drop-in to
+# let them (re)start the services for you, no password prompt.
+#
+# Install once, as root (replace `rob` with your host user if different):
+#   sudo install -m 0440 deploy/sail-sudoers.example /etc/sudoers.d/sail
+#   sudo sed -i 's/^rob /<youruser> /' /etc/sudoers.d/sail      # if not `rob`
+#   sudo visudo -cf /etc/sudoers.d/sail                          # validate before trusting it
+#
+# Scope is deliberately narrow: only service control (start/stop/restart/enable/daemon-reload) for
+# exactly these two units — NOT arbitrary file writes. The one-time unit-file installation that
+# phoenixd provisioning needs (copying into /etc/systemd/system) is left as a manual sudo step on
+# purpose, so this rule can't be used to drop in an arbitrary unit.
+rob ALL=(root) NOPASSWD: /usr/bin/systemctl restart sail-host, /usr/bin/systemctl start sail-host, /usr/bin/systemctl stop sail-host, /usr/bin/systemctl restart phoenixd, /usr/bin/systemctl start phoenixd, /usr/bin/systemctl enable --now phoenixd, /usr/bin/systemctl daemon-reload

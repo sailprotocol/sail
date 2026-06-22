@@ -390,3 +390,159 @@ def api_selftest(request: Request):
                 "latency_ms": round((time.monotonic() - t0) * 1000)}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "via": via, "error": str(e)[:140]}
+
+
+# --- first-run setup wizard (LOCAL ONLY) ------------------------------------
+# Same local-only gate as the dashboard: these read hardware/config and WRITE .env.host + restart
+# the service, so they must never be reachable over the .onion. The wizard is host/static/wizard.html.
+_NOT_FOUND = JSONResponse({"error": "not found"}, status_code=404)
+
+
+def _ollama_models() -> list[dict]:
+    """Installed Ollama models (name + size), or [] if Ollama isn't reachable."""
+    import httpx
+    url = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/tags"
+    try:
+        r = httpx.get(url, timeout=4.0)
+        r.raise_for_status()
+        return [{"name": m["name"], "size": m.get("size", 0)} for m in r.json().get("models", [])]
+    except (httpx.HTTPError, KeyError, ValueError):
+        return []
+
+
+@app.get("/setup")
+def setup_page(request: Request):
+    if not _is_local(request):
+        return _NOT_FOUND
+    return FileResponse(_STATIC / "wizard.html")
+
+
+@app.get("/api/setup/detect")
+def setup_detect(request: Request):
+    """Step 1: real GPU / Ollama / Tor checks for the machine."""
+    if not _is_local(request):
+        return _NOT_FOUND
+    import socket
+    import subprocess
+
+    # GPU via nvidia-smi (Ollama can still run on CPU, so absence is a warning, not a failure).
+    gpu = {"ok": False, "detail": "no NVIDIA GPU detected (Ollama can still run on CPU)"}
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                              "--format=csv,noheader"], capture_output=True, text=True, timeout=8)
+        if out.returncode == 0 and out.stdout.strip():
+            name, _, mem = out.stdout.strip().splitlines()[0].partition(",")
+            gpu = {"ok": True, "detail": f"{name.strip()} · {mem.strip()}"}
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    models = _ollama_models()
+    ollama = ({"ok": True, "detail": f"running · {len(models)} model(s) available"} if models or
+              _ollama_reachable() else {"ok": False, "detail": "not reachable on " +
+              os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")})
+
+    # Tor control port reachable (needed only for TRANSPORT=tor, but we always report it).
+    cp = int(os.getenv("TOR_CONTROL_PORT", "9051"))
+    tor = {"ok": False, "detail": f"control port {cp} not reachable"}
+    try:
+        with socket.create_connection(("127.0.0.1", cp), timeout=3):
+            tor = {"ok": True, "detail": f"control port {cp} reachable · onion ready"}
+    except OSError:
+        pass
+
+    return {"gpu": gpu, "ollama": ollama, "tor": tor, "models": models}
+
+
+def _ollama_reachable() -> bool:
+    import httpx
+    try:
+        httpx.get(os.getenv("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/tags", timeout=3.0)
+        return True
+    except httpx.HTTPError:
+        return False
+
+
+@app.get("/api/setup/models")
+def setup_models(request: Request):
+    if not _is_local(request):
+        return _NOT_FOUND
+    return {"models": _ollama_models()}
+
+
+@app.post("/api/setup/pull")
+async def setup_pull(request: Request):
+    """Pull a model into Ollama, streaming its progress lines straight through to the wizard."""
+    if not _is_local(request):
+        return _NOT_FOUND
+    import httpx
+    name = (await request.json()).get("name", "").strip()
+    if not name:
+        return JSONResponse({"error": "model name required"}, status_code=400)
+    url = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/pull"
+
+    def proxy():
+        with httpx.stream("POST", url, json={"name": name, "stream": True}, timeout=None) as r:
+            for line in r.iter_lines():
+                if line:
+                    yield line + "\n"
+
+    return StreamingResponse(proxy(), media_type="application/x-ndjson")
+
+
+@app.post("/api/setup/model")
+async def setup_model(request: Request):
+    if not _is_local(request):
+        return _NOT_FOUND
+    from host import config_writer
+    try:
+        updates = config_writer.model_env((await request.json()).get("name", ""))
+        config_writer.update_env_file(updates)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, **updates}
+
+
+@app.post("/api/setup/pricing")
+async def setup_pricing(request: Request):
+    if not _is_local(request):
+        return _NOT_FOUND
+    from host import config_writer
+    body = await request.json()
+    try:
+        updates = config_writer.pricing_env(body.get("price_sat"), body.get("chunk"), body.get("expiry"))
+        config_writer.update_env_file(updates)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, **updates}
+
+
+@app.post("/api/setup/payout")
+async def setup_payout(request: Request):
+    """Step 4. Only phoenixd is wired in setup: it provisions a node and returns the seed for the
+    wizard's back-up step. lnd/nwc tiers are not enabled here yet (one seam at a time)."""
+    if not _is_local(request):
+        return _NOT_FOUND
+    from host import config_writer
+    body = await request.json()
+    tier = (body.get("tier") or "").lower()
+    if tier != "phoenixd":
+        return JSONResponse({"error": f"payout tier {tier!r} is not available in setup yet"},
+                            status_code=400)
+    try:
+        config_writer.update_env_file(config_writer.payout_env(tier, body.get("fields") or {}))
+        from host import phoenixd_setup
+        result = phoenixd_setup.provision()  # downloads + first-runs phoenixd; writes the password
+    except Exception as e:  # noqa: BLE001 — surface provisioning failure to the wizard
+        return JSONResponse({"error": str(e)[:300]}, status_code=500)
+    # seed_words is shown once in the local wizard, then discarded; never persisted/transmitted here.
+    return {"ok": True, "tier": tier, "seed_words": result["seed_words"], "service": result["service"]}
+
+
+@app.post("/api/setup/golive")
+def setup_golive(request: Request):
+    """Final step: restart sail-host so it loads the new config, creates the onion, and publishes
+    the listing. Restart may kill this very process — the wizard then polls /api/status until live."""
+    if not _is_local(request):
+        return _NOT_FOUND
+    from host import config_writer
+    return config_writer.restart_service()
