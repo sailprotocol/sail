@@ -13,12 +13,14 @@ Endpoints:
 """
 from __future__ import annotations
 
+import collections
 import os
+import pathlib
 import secrets
 import time
 
 from fastapi import FastAPI, Header, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from shared.config import load_env
 
@@ -66,6 +68,30 @@ _NOTHING = object()  # 1-token look-ahead sentinel (distinguishes "no buffered t
 # the host confirms settlement via its own LND and then streams. session_id is the bearer token.
 # sid -> {prompt, max_tokens, payment_hash, amount_msat, created, served}
 _bolt11: dict[str, dict] = {}
+
+# --- read-only metrics for the operator dashboard (in-memory; reset on restart) -------------
+_START_TIME = time.time()
+_stats = {"day": "", "tokens": 0, "msat": 0}      # tokens served + msat earned today
+_activity: collections.deque = collections.deque(maxlen=20)  # recent completed sessions
+_STATIC = pathlib.Path(__file__).parent / "static"
+
+
+def _record_settled(tag: str, tokens: int, msat: int) -> None:
+    """Tally a completed session into today's totals + the recent-activity ring."""
+    today = time.strftime("%Y-%m-%d", time.localtime())
+    if _stats["day"] != today:
+        _stats.update(day=today, tokens=0, msat=0)
+    _stats["tokens"] += tokens
+    _stats["msat"] += msat
+    _activity.appendleft({"tag": tag, "model": _model.name, "tokens": tokens,
+                          "msat": msat, "state": "settled", "ts": int(time.time())})
+
+
+def _today() -> dict:
+    """Today's totals, rolling over at the date boundary."""
+    if _stats["day"] != time.strftime("%Y-%m-%d", time.localtime()):
+        _stats.update(day=time.strftime("%Y-%m-%d", time.localtime()), tokens=0, msat=0)
+    return _stats
 
 
 def _evict_stale() -> None:
@@ -200,6 +226,7 @@ async def inference(request: Request, authorization: str | None = Header(default
                 gen.close()
             except Exception:
                 pass
+            _record_settled(sid[:4], s["emitted"], spent)
             _sessions.pop(sid, None)
             yield done_trailer(spent)
 
@@ -265,10 +292,13 @@ def bolt11_stream(sid: str):
     s["served"] = True
 
     def token_stream():
+        n = 0
         for i, tok in enumerate(_model.stream(s["prompt"])):
             if i >= s["max_tokens"]:
                 break
+            n += 1
             yield tok
+        _record_settled(sid[:4], n, s["amount_msat"])
         _bolt11.pop(sid, None)
         yield done_trailer(s["amount_msat"])  # manual prepay = the ceiling
 
@@ -297,3 +327,66 @@ async def mock_pay(request: Request):
     if preimage is None:
         return JSONResponse({"error": "unknown payment_hash"}, status_code=404)
     return {"preimage": preimage}
+
+
+# --- operator dashboard (LOCAL ONLY) ----------------------------------------
+# The daemon's inference routes are exposed over the .onion (onion:80 -> 127.0.0.1:PORT), so
+# anything served here is reachable over Tor too. The dashboard + status report earnings/activity,
+# which are operator-private — so gate them to local access only (request Host is not the .onion).
+# Best-effort (the Host header is client-supplied); a dedicated localhost-only port is the harden.
+def _is_local(request: Request) -> bool:
+    return ".onion" not in (request.headers.get("host", ""))
+
+
+@app.get("/")
+def dashboard(request: Request):
+    if not _is_local(request):
+        return JSONResponse({"error": "not found"}, status_code=404)  # don't expose over the onion
+    return FileResponse(_STATIC / "dashboard.html")
+
+
+@app.get("/api/status")
+def api_status(request: Request):
+    if not _is_local(request):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    t = _today()
+    # in-progress metered generations (started, not yet done) shown as "streaming"
+    streaming = [{"tag": sid[:4], "model": _model.name, "tokens": v["emitted"],
+                  "msat": v["charged_msat"], "state": "streaming"}
+                 for sid, v in _sessions.items() if v.get("gen") is not None]
+    return {
+        "state": "live",
+        "pubkey": PUBKEY,
+        "onion": ENDPOINT,
+        "transport": TRANSPORT,
+        "model": _model.name,
+        "payments": os.getenv("PAYMENTS", "mock").lower(),
+        "price_msat_per_token": PRICE_MSAT_PER_TOKEN,
+        "chunk_tokens": CHUNK_TOKENS,
+        "invoice_expiry_s": BOLT11_EXPIRY_SECONDS,
+        "uptime_s": int(time.time() - _START_TIME),
+        "streaming_now": len(streaming),
+        "tokens_today": t["tokens"],
+        "sats_today": t["msat"] // 1000,
+        "activity": streaming + list(_activity),
+    }
+
+
+@app.get("/api/selftest")
+def api_selftest(request: Request):
+    """Self-test: send a tiny prompt to our OWN endpoint (over Tor if it's a .onion) and confirm a
+    402 + invoice comes back — proof clients can reach us and pay. Mints one unpaid invoice."""
+    if not _is_local(request):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    import httpx
+    via = "tor" if ".onion" in ENDPOINT else "direct"
+    proxy = os.getenv("TOR_SOCKS", "socks5h://127.0.0.1:9050") if via == "tor" else None
+    t0 = time.monotonic()
+    try:
+        r = httpx.post(f"{ENDPOINT}/v1/inference", json={"prompt": "selftest", "max_tokens": 1},
+                       proxy=proxy, timeout=45.0)
+        ok = r.status_code == 402 and "invoice" in r.text
+        return {"ok": ok, "status": r.status_code, "via": via,
+                "latency_ms": round((time.monotonic() - t0) * 1000)}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "via": via, "error": str(e)[:140]}
