@@ -406,7 +406,7 @@ async function pollLive(){
 async function liveDone(st){
   $('livebusy').style.display='none'; $('manualrestart').style.display='none'; $('livedone').style.display='block';
   $('liveh').textContent='Your host is live';
-  const pub=st.pubkey||''; $('alias').textContent='host · '+pub.slice(-4)+'   (alias coming soon)';
+  const pub=st.pubkey||''; $('alias').textContent = st.alias_label || ('host · '+pub.slice(0,4));
   $('l-onion').textContent=st.onion; $('l-pub').textContent=pub.slice(0,8)+'…'+pub.slice(-6);
   try{ const t=await api('/api/selftest'); $('l-test').innerHTML = t.ok? '<span class="pill good">● 402 passing</span>' : '<span class="pill bad">● failed</span>'; }
   catch{ $('l-test').innerHTML='<span class="pill q">unavailable</span>'; }

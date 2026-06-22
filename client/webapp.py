@@ -24,6 +24,7 @@ load_env()  # same dotenv flow as the host daemon; reuses .env.client
 
 import os
 
+from shared.alias import derive_alias, alias_label
 from client import core
 from client import reputation
 from client import history
@@ -57,6 +58,10 @@ def api_hosts():
             }
         out.append({
             "pubkey": h.pubkey,
+            # Alias derived HERE from the signature-verified pubkey — the client never trusts any
+            # name a listing might carry, so a host can't impersonate another's alias.
+            "alias": derive_alias(h.pubkey),
+            "alias_label": alias_label(h.pubkey),
             "endpoint": h.endpoint,
             "model": {"name": m.name, "price_msat_per_token": m.price_msat_per_token,
                       "context_window": m.context_window},
@@ -120,6 +125,7 @@ def _infer_stream(start_pubkey: str, prompt: str, max_tokens: int):
     for i, host in enumerate(order):
         if i > 0:  # we moved here because an earlier host was unreachable
             yield json.dumps({"type": "failover", "to_pubkey": host.pubkey,
+                              "to_alias": alias_label(host.pubkey),
                               "model": host.models[0].name}) + "\n"
         emitted = 0
         buf: list[str] = []

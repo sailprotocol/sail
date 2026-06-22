@@ -12,6 +12,7 @@ from __future__ import annotations
 import sys
 
 from shared.config import load_env
+from shared.alias import alias_label
 from client import core
 
 
@@ -25,7 +26,9 @@ def main() -> None:
                  "or dropped by local reputation).")
     host = hosts[0]  # best-ranked
     bond = f" | bond {host.bond_txid} (advisory)" if getattr(host, "bond_txid", None) else ""
-    print(f"[client] using host {host.pubkey} -> {host.models[0].name} @ {host.endpoint}{bond}")
+    # Alias derived from the verified pubkey (shared.alias); the pubkey stays the source of truth.
+    print(f"[client] using host {alias_label(host.pubkey)}  [{host.pubkey}]")
+    print(f"[client]   -> {host.models[0].name} @ {host.endpoint}{bond}")
     if core.proxy_for(host.endpoint):
         print("[client] .onion host -> routing over Tor")
 

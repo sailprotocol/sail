@@ -314,7 +314,7 @@ async function refresh(){
   intent=null; if(mode!=='live'){ mode='live'; $('hero').className='hero'; renderControls('live'); }
   $('led').className='led ok';
   $('hstate').textContent = "You're hosting";
-  $('hsub').textContent = `serving ${d.model} over ${d.transport} · up ${fmtUptime(d.uptime_s)}`;
+  $('hsub').innerHTML = `<b style="color:var(--beacon-2)">${d.alias_label||''}</b> · serving ${d.model} over ${d.transport} · up ${fmtUptime(d.uptime_s)}`;
   $('t-rail').textContent = d.payments; $('c-rail').textContent = d.payments;
   $('t-pub').textContent = (d.pubkey||'').slice(0,8)+'…';
   $('pubfull').textContent = (d.pubkey||'').slice(0,8)+'…'+(d.pubkey||'').slice(-6);

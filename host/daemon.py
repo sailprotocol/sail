@@ -30,6 +30,7 @@ from shared.l402 import (
     L402Challenge, new_macaroon, parse_authorization, verify,
     next_trailer, done_trailer,
 )
+from shared.alias import derive_alias, alias_label
 from shared.listing import HostListing, ModelOffer
 from shared import registry
 from host import model as model_mod
@@ -357,6 +358,8 @@ def api_status(request: Request):
     return {
         "state": "live",
         "pubkey": PUBKEY,
+        "alias": derive_alias(PUBKEY),
+        "alias_label": alias_label(PUBKEY),
         "onion": ENDPOINT,
         "transport": TRANSPORT,
         "model": _model.name,
