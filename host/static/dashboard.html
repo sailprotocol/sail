@@ -14,6 +14,7 @@
     --fg:#e9eef5; --muted:#8b98aa;
     --beacon:#f7931a; --beacon-2:#ffb24d; --beacon-deep:#b8690d;
     --code-bg:#0c1119; --good:#5fb27a; --good-bg:rgba(95,178,122,0.1); --bad:#f85149;
+    --danger:#c2543f; --danger-bg:rgba(194,84,63,0.1);
   }
   *{box-sizing:border-box;}
   @media (prefers-reduced-motion: reduce){ *{animation:none !important; transition:none !important;} }
@@ -41,7 +42,7 @@
   .beacon{width:16px; height:16px; border-radius:50%; background:var(--beacon); position:relative; box-shadow:0 0 12px var(--beacon);}
   .beacon::after{content:""; position:absolute; inset:-7px; border-radius:50%; border:2px solid var(--beacon); animation:pulse 2.2s ease-out infinite;}
   @keyframes pulse{0%{transform:scale(.6); opacity:.9;} 100%{transform:scale(1.8); opacity:0;}}
-  .paused .beacon{background:var(--muted); box-shadow:none;} .paused .beacon::after{display:none;}
+  .paused .beacon, .stopped .beacon{background:var(--muted); box-shadow:none;} .paused .beacon::after, .stopped .beacon::after{display:none;}
   .hero .state{font-family:'Bricolage Grotesque'; font-weight:800; font-size:1.6rem;}
   .hero .statesub{color:var(--muted); font-size:0.9rem; margin-top:1px;}
   .endpoints{display:flex; gap:26px; flex-wrap:wrap; margin-top:18px; padding-top:18px; border-top:1px solid var(--line);}
@@ -72,6 +73,26 @@
   .badge.stream{background:var(--good-bg); color:var(--good);} .badge.done{background:var(--ink-3); color:var(--muted);}
   @media (max-width:680px){ .sessions .row{grid-template-columns:1.4fr 1fr auto;} .sessions .hidesm{display:none;} }
   .docs{margin-top:8px; font-size:0.85rem; color:var(--muted);}
+  /* host controls */
+  .controls{display:flex; gap:12px; margin-top:18px; padding-top:18px; border-top:1px solid var(--line); flex-wrap:wrap;}
+  .btn{font-family:'Bricolage Grotesque'; font-weight:700; font-size:0.92rem; border:1px solid var(--line); background:var(--ink-3); color:var(--fg); padding:10px 18px; border-radius:9px; cursor:pointer; transition:all .15s;}
+  .btn:hover{border-color:var(--beacon);} .btn:disabled{opacity:.45; cursor:not-allowed;}
+  .btn.primary{background:var(--beacon); color:#1a0f02; border-color:var(--beacon);} .btn.primary:hover{background:var(--beacon-2);}
+  .btn.danger{color:var(--danger); border-color:rgba(194,84,63,0.4);} .btn.danger:hover{border-color:var(--danger); background:var(--danger-bg);}
+  .ctl-note{font-size:0.85rem; color:var(--muted); margin:13px 0 0; display:flex; gap:8px; align-items:flex-start;}
+  .ctl-note::before{content:""; width:7px; height:7px; margin-top:7px; transform:rotate(45deg); background:var(--muted); flex:none;}
+  .scrim{position:fixed; inset:0; background:rgba(5,8,12,0.7); backdrop-filter:blur(2px); display:none; align-items:center; justify-content:center; padding:22px; z-index:100;}
+  .scrim.on{display:flex;}
+  .modal{width:480px; max-width:100%; background:var(--ink-2); border:1px solid var(--line); border-radius:15px; padding:24px;}
+  .modal.danger-modal{border-color:rgba(194,84,63,0.5);}
+  .modal h3{font-size:1.2rem; font-weight:700; margin-bottom:8px;}
+  .modal p{font-size:0.92rem; color:var(--muted); margin:0 0 14px;} .modal p strong{color:var(--fg);}
+  .modal .danger-box{border:1px solid rgba(194,84,63,0.4); background:var(--danger-bg); border-radius:9px; padding:13px 15px; font-size:0.88rem; margin-bottom:14px;} .modal .danger-box b{color:#e08a76;}
+  .typefield{margin-bottom:16px;} .typefield label{display:block; font-size:0.82rem; color:var(--muted); margin-bottom:6px;} .typefield label .mono{color:var(--fg);}
+  .typefield input{width:100%; background:var(--code-bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:var(--fg); font-family:'IBM Plex Mono',monospace; font-size:0.88rem;} .typefield input:focus{outline:none; border-color:var(--danger);}
+  .cmd{background:var(--code-bg); border:1px solid var(--line); border-radius:9px; padding:12px 14px; margin-bottom:8px; display:flex; align-items:center; gap:10px;}
+  .cmd code{flex:1; font-family:'IBM Plex Mono',monospace; font-size:0.82rem; color:var(--beacon-2); overflow-x:auto; white-space:nowrap;}
+  .modal .actions{display:flex; gap:11px; justify-content:flex-end; margin-top:18px;}
 </style>
 </head>
 <body>
@@ -97,6 +118,8 @@
         </div>
       </div>
     </div>
+    <div class="controls" id="controls"></div>
+    <p class="ctl-note" id="ctlnote"></p>
     <div class="endpoints">
       <div class="ep">
         <div class="k">Onion endpoint</div>
@@ -141,8 +164,39 @@
     <div id="activity"></div>
   </div>
 
-  <p class="docs">Read-only operator view (local). Full host guide: <a href="https://sailprotocol.com/docs/">sailprotocol.com/docs →</a></p>
+  <p class="docs">Local operator view. Full host guide: <a href="https://sailprotocol.com/docs/">sailprotocol.com/docs →</a></p>
 </main>
+
+<!-- Pause confirm -->
+<div class="scrim" id="m-confirm">
+  <div class="modal">
+    <h3 id="c-title">Pause hosting?</h3>
+    <p id="c-body"></p>
+    <div class="actions"><button class="btn" data-close>Cancel</button><button class="btn primary" id="c-go">Pause</button></div>
+  </div>
+</div>
+
+<!-- Stop & remove (destructive) -->
+<div class="scrim" id="m-remove">
+  <div class="modal danger-modal">
+    <h3>Stop &amp; remove hosting</h3>
+    <p>This <strong>disables and deletes</strong> the <span class="mono">sail-host</span> service. Your host leaves the network — listing withdrawn, no auto-start on boot. Setting up again means re-running the wizard.</p>
+    <div class="danger-box"><b>Your sats are safe.</b> phoenixd funds and your 12-word recovery phrase stay in <span class="mono">~/.phoenix</span> — removing the service doesn't touch them.</div>
+    <div class="typefield"><label>Type <span class="mono">remove</span> to confirm</label><input id="rm-input" type="text" autocomplete="off" spellcheck="false" placeholder="remove"></div>
+    <div class="actions"><button class="btn" data-close>Cancel</button><button class="btn danger" id="rm-go" disabled>Stop &amp; remove</button></div>
+  </div>
+</div>
+
+<!-- Command surface (sudo fallback / manual steps) -->
+<div class="scrim" id="m-cmd">
+  <div class="modal">
+    <h3 id="cmd-title">Run this to finish</h3>
+    <p id="cmd-body">The daemon can't change a system service on its own. Run this in your terminal, then re-check.</p>
+    <div id="cmd-list"></div>
+    <p class="ctl-note" id="cmd-self" style="margin-top:6px;">This stops the process serving this page — it'll go unresponsive until the service is back.</p>
+    <div class="actions"><button class="btn" data-close>Close</button><button class="btn primary" id="cmd-recheck">I ran it — re-check</button></div>
+  </div>
+</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -151,10 +205,113 @@ function fmtUptime(s){ s=s||0; const d=Math.floor(s/86400), h=Math.floor(s%86400
   return d? `${d}d ${h}h` : h? `${h}h ${m}m` : `${m}m`; }
 function num(n){ return (n||0).toLocaleString(); }
 
+// ---- mode / controls ----
+// intent = the state the operator just drove us into; governs what a *dropped* /api/status means
+// (paused vs stopped vs a genuine crash). A successful status always means we're live.
+let mode='live', intent=null;
+const CTL = {
+  live:{ note:'Pause withdraws your listing and stops the daemon — clients see you offline. Resume brings the same onion + pubkey straight back.',
+         btns:[['Pause hosting','primary','pause'],['Stop & remove…','danger','remove']] },
+  paused:{ state:'Hosting paused', sub:'Listing withdrawn · daemon stopped · clients see you offline',
+           note:'Your identity is preserved. Resume restarts the daemon on the same onion + pubkey.',
+           btns:[['Resume hosting','primary','resume'],['Stop & remove…','danger','remove']] },
+  stopped:{ state:'Hosting stopped', sub:'Service removed · will not start on boot',
+            note:'You’ve left the network. Funds (if phoenixd) remain in ~/.phoenix. Set up again anytime.',
+            btns:[['Set up hosting again','primary','setup']] },
+  resuming:{ state:'Resuming…', sub:'starting the daemon — this page will refresh when it’s back',
+             note:'', btns:[] },
+};
+function renderControls(m){
+  $('controls').innerHTML='';
+  (CTL[m].btns||[]).forEach(([label,cls,act])=>{
+    const b=document.createElement('button'); b.className='btn '+cls; b.textContent=label; b.onclick=()=>handle(act);
+    $('controls').appendChild(b);
+  });
+  $('ctlnote').textContent = CTL[m].note || '';
+  $('ctlnote').style.display = CTL[m].note ? 'flex':'none';
+}
+function setMode(m){
+  if(m===mode){ return; }
+  mode=m;
+  $('hero').className='hero'+(m==='paused'?' paused':m==='stopped'?' stopped':'');
+  if(m!=='live'){ $('hstate').textContent=CTL[m].state; $('hsub').textContent=CTL[m].sub; $('led').className='led off'; }
+  renderControls(m);
+}
+function handle(act){
+  if(act==='pause') confirmModal('Pause hosting?','Your listing goes stale and the daemon stops; clients see you offline. Resume anytime on the same identity.','Pause',
+    ()=>doControl('pause','/api/control/pause','paused'));
+  if(act==='resume') doControl('resume','/api/control/resume',null);
+  if(act==='remove') openRemove();
+  if(act==='setup') window.location='/setup';
+}
+function confirmModal(title,body,go,fn){
+  $('c-title').textContent=title; $('c-body').textContent=body;
+  const g=$('c-go'); g.textContent=go; g.onclick=()=>{ closeAll(); fn(); }; open('m-confirm');
+}
+function open(id){ $(id).classList.add('on'); }
+function closeAll(){ document.querySelectorAll('.scrim').forEach(s=>s.classList.remove('on')); }
+document.querySelectorAll('[data-close]').forEach(b=>b.onclick=closeAll);
+document.querySelectorAll('.scrim').forEach(s=>s.addEventListener('click',e=>{ if(e.target===s) closeAll(); }));
+
+// remove flow: type-to-confirm
+$('rm-input').addEventListener('input',()=>{ $('rm-go').disabled = $('rm-input').value.trim().toLowerCase()!=='remove'; });
+function openRemove(){ $('rm-input').value=''; $('rm-go').disabled=true; open('m-remove'); }
+$('rm-go').onclick=()=>{ closeAll(); doRemove(); };
+
+function surfaceCmds(title, cmds, selfStop, after){
+  $('cmd-title').textContent=title;
+  const list=$('cmd-list'); list.innerHTML='';
+  cmds.forEach(c=>{ const d=document.createElement('div'); d.className='cmd';
+    d.innerHTML=`<code></code><button class="copy">copy</button>`;
+    d.querySelector('code').textContent=c;
+    const btn=d.querySelector('.copy'); btn.onclick=()=>{ navigator.clipboard?.writeText(c); btn.textContent='copied'; setTimeout(()=>btn.textContent='copy',1100); };
+    list.appendChild(d); });
+  $('cmd-self').style.display = selfStop ? 'flex':'none';
+  $('cmd-recheck').onclick=()=>{ closeAll(); after(); };
+  open('m-cmd');
+}
+
+async function doControl(action, endpoint, target){
+  let res=null;
+  try{ res = await (await fetch(endpoint,{method:'POST'})).json(); }catch{ res=null; }  // self-stop may drop the connection
+  if(res && res.ok===false && res.command){
+    surfaceCmds('Run this to '+action, [res.command], action!=='resume', ()=>finalize(action,target));
+    return;
+  }
+  finalize(action,target);  // sudo -n worked, or the connection dropped because we stopped
+}
+async function doRemove(){
+  let res=null;
+  try{ res = await (await fetch('/api/control/remove',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({confirm:'remove'})})).json(); }catch{ res=null; }
+  const cmds=[];
+  if(res){
+    if(res.disable && res.disable.ok===false && res.disable.command) cmds.push(res.disable.command);
+    (res.manual_commands||[]).forEach(c=>cmds.push(c));
+  }else{
+    cmds.push('sudo rm /etc/systemd/system/sail-host.service','sudo systemctl daemon-reload');
+  }
+  // Removal always has a manual unit-file step, so always surface it.
+  surfaceCmds('Run these to finish removing', cmds, true, ()=>finalize('remove','stopped'));
+}
+function finalize(action,target){
+  if(action==='pause'){ intent='paused'; setMode('paused'); }
+  if(action==='remove'){ intent='stopped'; setMode('stopped'); }
+  if(action==='resume'){ intent=null; setMode('resuming'); refresh(); }
+}
+
 async function refresh(){
   let d;
-  try{ d = await (await fetch('/api/status')).json(); }catch{ $('hstate').textContent='Host unreachable'; $('led').className='led off'; return; }
+  try{ d = await (await fetch('/api/status')).json(); }
+  catch{
+    $('led').className='led off';
+    if(intent==='paused') setMode('paused');
+    else if(intent==='stopped') setMode('stopped');
+    else if(mode!=='resuming'){ $('hstate').textContent='Host unreachable'; $('hsub').textContent='the daemon isn’t responding'; }
+    return;
+  }
   if(d.error){ $('hstate').textContent='Unavailable'; return; }
+  // status answered → we are live (clears any pause/stop intent if the daemon is actually serving)
+  intent=null; if(mode!=='live'){ mode='live'; $('hero').className='hero'; renderControls('live'); }
   $('led').className='led ok';
   $('hstate').textContent = "You're hosting";
   $('hsub').textContent = `serving ${d.model} over ${d.transport} · up ${fmtUptime(d.uptime_s)}`;
@@ -186,7 +343,7 @@ $('runtest').onclick = async ()=>{
   }catch(e){ p.textContent='● error'; p.className='pill bad'; }
 };
 
-refresh(); setInterval(refresh, 5000);
+renderControls('live'); refresh(); setInterval(refresh, 5000);
 </script>
 </body>
 </html>

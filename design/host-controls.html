@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Host controls — SAIL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0a0e15; --ink-2:#10161f; --ink-3:#161d28;
+    --line:#202a37; --line-faint:rgba(122,143,168,0.08);
+    --fg:#e9eef5; --muted:#8b98aa;
+    --beacon:#f7931a; --beacon-2:#ffb24d; --beacon-deep:#b8690d;
+    --warn-bg:rgba(247,147,26,0.07); --code-bg:#0c1119; --good:#5fb27a; --good-bg:rgba(95,178,122,0.12);
+    --danger:#c2543f; --danger-bg:rgba(194,84,63,0.1);
+  }
+  *{box-sizing:border-box;}
+  @media (prefers-reduced-motion: reduce){ *{animation:none !important; transition:none !important;} }
+  body{margin:0; background:var(--ink); color:var(--fg); font-family:'Inter',system-ui,sans-serif;
+    line-height:1.6; -webkit-font-smoothing:antialiased;}
+  .mono{font-family:'IBM Plex Mono',monospace;} strong{color:var(--fg); font-weight:600;}
+  h1,h2,h3{font-family:'Bricolage Grotesque'; letter-spacing:-0.01em; margin:0;}
+
+  .topbar{height:62px; display:flex; align-items:center; gap:11px; padding:0 22px; border-bottom:1px solid var(--line);}
+  .logo{font-family:'Bricolage Grotesque'; font-weight:800; font-size:1.2rem;} .logo b{color:var(--beacon);}
+  .tag{font-family:'IBM Plex Mono',monospace; font-size:0.6rem; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted);}
+  .demo{margin-left:auto; font-size:0.74rem; color:var(--muted); display:flex; align-items:center; gap:7px;}
+
+  main{max-width:660px; margin:0 auto; padding:34px 22px 90px;}
+  .eyebrow{font-family:'IBM Plex Mono',monospace; font-size:0.66rem; letter-spacing:0.18em; text-transform:uppercase;
+    color:var(--beacon); display:block; margin-bottom:10px;}
+
+  /* hero */
+  .hero{border:1px solid var(--line); border-radius:16px; background:linear-gradient(180deg,#12191f,var(--ink-2));
+    padding:24px 26px; margin-bottom:18px;}
+  .hero .row{display:flex; align-items:center; gap:16px; flex-wrap:wrap;}
+  .beaconwrap{display:flex; align-items:center; gap:13px; flex:1; min-width:230px;}
+  .beacon{width:16px; height:16px; border-radius:50%; background:var(--beacon); flex:none; position:relative; box-shadow:0 0 12px var(--beacon);}
+  .beacon::after{content:""; position:absolute; inset:-7px; border-radius:50%; border:2px solid var(--beacon); animation:pulse 2.2s ease-out infinite;}
+  @keyframes pulse{0%{transform:scale(.6);opacity:.9;}100%{transform:scale(1.8);opacity:0;}}
+  .paused .beacon, .stopped .beacon{background:var(--muted); box-shadow:none;} .paused .beacon::after,.stopped .beacon::after{display:none;}
+  .state{font-family:'Bricolage Grotesque'; font-weight:800; font-size:1.55rem;}
+  .statesub{color:var(--muted); font-size:0.9rem; margin-top:2px;}
+
+  /* controls */
+  .controls{display:flex; gap:12px; margin-top:20px; padding-top:18px; border-top:1px solid var(--line); flex-wrap:wrap;}
+  .btn{font-family:'Bricolage Grotesque'; font-weight:700; font-size:0.95rem; border:1px solid var(--line);
+    background:var(--ink-3); color:var(--fg); padding:11px 20px; border-radius:9px; cursor:pointer; transition:all .15s;}
+  .btn:hover{border-color:var(--beacon);}
+  .btn.primary{background:var(--beacon); color:#1a0f02; border-color:var(--beacon);} .btn.primary:hover{background:var(--beacon-2);}
+  .btn.danger{color:var(--danger); border-color:rgba(194,84,63,0.4);} .btn.danger:hover{border-color:var(--danger); background:var(--danger-bg);}
+  .btn:disabled{opacity:.45; cursor:not-allowed;}
+  .ctl-note{font-size:0.85rem; color:var(--muted); margin-top:14px; display:flex; gap:8px; align-items:flex-start;}
+  .ctl-note::before{content:""; width:7px; height:7px; margin-top:7px; transform:rotate(45deg); background:var(--muted); flex:none;}
+
+  /* modal */
+  .scrim{position:fixed; inset:0; background:rgba(5,8,12,0.7); backdrop-filter:blur(2px); display:none;
+    align-items:center; justify-content:center; padding:22px; z-index:100;}
+  .scrim.on{display:flex;}
+  .modal{width:480px; max-width:100%; background:var(--ink-2); border:1px solid var(--line); border-radius:15px; padding:24px;}
+  .modal.danger-modal{border-color:rgba(194,84,63,0.5);}
+  .modal h3{font-size:1.25rem; font-weight:700; margin-bottom:8px; display:flex; align-items:center; gap:9px;}
+  .modal h3::before{content:""; width:9px; height:9px; transform:rotate(45deg); background:var(--beacon); box-shadow:0 0 9px var(--beacon); flex:none;}
+  .modal.danger-modal h3::before{background:var(--danger); box-shadow:0 0 9px var(--danger);}
+  .modal p{font-size:0.92rem; color:var(--muted); margin:0 0 14px;} .modal p strong{color:var(--fg);}
+  .modal .danger-box{border:1px solid rgba(194,84,63,0.4); background:var(--danger-bg); border-radius:9px; padding:13px 15px; font-size:0.88rem; margin-bottom:14px;}
+  .modal .danger-box b{color:#e08a76;}
+  .typefield{margin-bottom:16px;} .typefield label{display:block; font-size:0.82rem; color:var(--muted); margin-bottom:6px;}
+  .typefield label .mono{color:var(--fg);}
+  .typefield input{width:100%; background:var(--code-bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px;
+    color:var(--fg); font-family:'IBM Plex Mono',monospace; font-size:0.88rem;} .typefield input:focus{outline:none; border-color:var(--danger);}
+
+  /* command surface */
+  .cmd{background:var(--code-bg); border:1px solid var(--line); border-radius:9px; padding:12px 14px; margin-bottom:8px;
+    display:flex; align-items:center; gap:10px;}
+  .cmd code{flex:1; font-family:'IBM Plex Mono',monospace; font-size:0.82rem; color:var(--beacon-2); overflow-x:auto; white-space:nowrap;}
+  .copy{border:1px solid var(--line); background:var(--ink-3); color:var(--muted); border-radius:5px; font-size:0.7rem;
+    padding:3px 9px; cursor:pointer; font-family:'IBM Plex Mono',monospace; flex:none;} .copy:hover{color:var(--beacon); border-color:var(--beacon);}
+
+  .modal .actions{display:flex; gap:11px; justify-content:flex-end; margin-top:18px;}
+  :focus-visible{outline:2px solid var(--beacon); outline-offset:3px;}
+
+  .info{position:relative; display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px;
+    border-radius:50%; border:1px solid var(--line); color:var(--muted); font-family:'IBM Plex Mono',monospace; font-size:0.62rem; cursor:help; background:var(--ink-3);}
+  .info:hover .tip,.info:focus .tip{opacity:1; visibility:visible;}
+  .info:hover,.info:focus-visible{border-color:var(--beacon); color:var(--beacon); outline:none;}
+  .info .tip{position:absolute; left:50%; transform:translateX(-50%); bottom:23px; width:230px; z-index:30; background:var(--ink-3);
+    border:1px solid var(--line); border-left:3px solid var(--beacon); border-radius:8px; padding:10px 12px; font-size:0.8rem; line-height:1.5;
+    color:var(--fg); box-shadow:0 12px 30px rgba(0,0,0,.55); opacity:0; visibility:hidden; transition:opacity .15s; text-align:left;}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <span class="logo">SA<b>I</b>L</span><span class="tag">Host · controls</span>
+  <label class="demo"><input type="checkbox" id="sudoers"> demo: sudoers drop-in installed</label>
+</div>
+
+<main>
+  <span class="eyebrow">Host · status &amp; controls</span>
+  <div class="hero" id="hero">
+    <div class="row">
+      <div class="beaconwrap">
+        <span class="beacon" aria-hidden="true"></span>
+        <div><div class="state" id="state">You're hosting</div><div class="statesub" id="statesub">Serving over Tor · listing live on 3 relays · up 4d 6h</div></div>
+      </div>
+    </div>
+    <div class="controls" id="controls"><!-- buttons injected --></div>
+    <p class="ctl-note" id="ctlnote">Pause withdraws your listing and stops the daemon — clients see you offline. Resume brings the same onion + pubkey straight back.</p>
+  </div>
+</main>
+
+<!-- PAUSE / RESUME confirm -->
+<div class="scrim" id="m-confirm">
+  <div class="modal">
+    <h3 id="c-title">Pause hosting?</h3>
+    <p id="c-body"></p>
+    <div class="actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="c-go">Pause</button>
+    </div>
+  </div>
+</div>
+
+<!-- STOP & REMOVE confirm (destructive) -->
+<div class="scrim" id="m-remove">
+  <div class="modal danger-modal">
+    <h3>Stop &amp; remove hosting</h3>
+    <p>This <strong>disables and deletes</strong> the <span class="mono">sail-host</span> service. Your host leaves the network — listing withdrawn, no auto-start on boot. Setting up again means re-running the wizard.</p>
+    <div class="danger-box" id="rm-funds">
+      <b>Your sats are safe.</b> phoenixd funds and your 12-word recovery phrase stay in <span class="mono">~/.phoenix</span> — removing the service doesn't touch them. Don't delete that folder without your backup.
+    </div>
+    <div class="typefield">
+      <label>Type <span class="mono">remove</span> to confirm</label>
+      <input id="rm-input" type="text" autocomplete="off" spellcheck="false" placeholder="remove">
+    </div>
+    <div class="actions">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn danger" id="rm-go" disabled>Stop &amp; remove</button>
+    </div>
+  </div>
+</div>
+
+<!-- COMMAND SURFACE (sudo fallback) -->
+<div class="scrim" id="m-cmd">
+  <div class="modal">
+    <h3 id="cmd-title">Run this to finish</h3>
+    <p id="cmd-body">The daemon can't change a system service on its own. Paste this in your terminal — then come back and re-check.</p>
+    <div id="cmd-list"></div>
+    <p class="ctl-note" style="margin-top:6px;" id="cmd-self">Heads up: this stops the process serving this page, so it'll go unresponsive until you resume.</p>
+    <div class="actions">
+      <button class="btn" data-close>Close</button>
+      <button class="btn primary" id="cmd-recheck">I ran it — re-check</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let st='live'; // live | paused | stopped
+  const sudoers=document.getElementById('sudoers');
+  const state=document.getElementById('state'), statesub=document.getElementById('statesub'),
+        hero=document.getElementById('hero'), controls=document.getElementById('controls'), ctlnote=document.getElementById('ctlnote');
+
+  const VIEW={
+    live:{cls:'', t:"You're hosting", s:'Serving over Tor · listing live on 3 relays · up 4d 6h',
+      note:'Pause withdraws your listing and stops the daemon — clients see you offline. Resume brings the same onion + pubkey straight back.',
+      btns:[['Pause hosting','primary','pause'],['Stop & remove…','danger','remove']]},
+    paused:{cls:'paused', t:'Hosting paused', s:'Listing withdrawn · daemon stopped · clients see you offline',
+      note:'Your identity is preserved. Resume restarts the daemon on the same onion + pubkey.',
+      btns:[['Resume hosting','primary','resume'],['Stop & remove…','danger','remove']]},
+    stopped:{cls:'stopped', t:'Hosting stopped', s:'Service removed · will not start on boot',
+      note:'You\u2019ve left the network. Funds (if phoenixd) remain in ~/.phoenix. Set up again anytime.',
+      btns:[['Set up hosting again','primary','setup']]}
+  };
+  function render(){
+    const v=VIEW[st]; hero.className='hero '+v.cls; state.textContent=v.t; statesub.textContent=v.s; ctlnote.textContent=v.note;
+    controls.innerHTML='';
+    v.btns.forEach(([label,cls,act])=>{ const b=document.createElement('button'); b.className='btn '+cls; b.textContent=label;
+      b.onclick=()=>handle(act); controls.appendChild(b); });
+  }
+  function open(id){document.getElementById(id).classList.add('on');}
+  function closeAll(){document.querySelectorAll('.scrim').forEach(s=>s.classList.remove('on'));}
+  document.querySelectorAll('[data-close]').forEach(b=>b.onclick=closeAll);
+  document.querySelectorAll('.scrim').forEach(s=>s.addEventListener('click',e=>{if(e.target===s)closeAll();}));
+
+  function handle(act){
+    if(act==='pause'){ confirmAct('Pause hosting?','Your listing is withdrawn and the daemon stops; clients see you as offline. You can resume anytime on the same identity.','Pause', ()=>doSudo('pause',['sudo systemctl stop sail-host'])); }
+    if(act==='resume'){ doSudo('resume',['sudo systemctl start sail-host']); }
+    if(act==='remove'){ document.getElementById('rm-input').value=''; document.getElementById('rm-go').disabled=true; open('m-remove'); }
+    if(act==='setup'){ alert('→ routes to the setup wizard'); }
+  }
+  function confirmAct(title,body,go,fn){
+    document.getElementById('c-title').textContent=title; document.getElementById('c-body').textContent=body;
+    const g=document.getElementById('c-go'); g.textContent=go; g.onclick=()=>{closeAll(); fn();}; open('m-confirm');
+  }
+
+  // remove flow
+  const rmInput=document.getElementById('rm-input'), rmGo=document.getElementById('rm-go');
+  rmInput.addEventListener('input',()=>rmGo.disabled = rmInput.value.trim().toLowerCase()!=='remove');
+  rmGo.onclick=()=>{ closeAll(); doSudo('remove',['sudo systemctl disable --now sail-host','sudo rm /etc/systemd/system/sail-host.service','sudo systemctl daemon-reload']); };
+
+  // the chosen "Both" behavior: try sudo -n (demo: sudoers toggle), else surface the command
+  function doSudo(act, cmds){
+    const isSelf = (act==='pause'||act==='remove'); // these stop the page's own daemon
+    if(sudoers.checked){ // seamless path
+      applyResult(act);
+      return;
+    }
+    // fallback: surface command
+    document.getElementById('cmd-title').textContent = act==='remove' ? 'Run these to remove hosting' : 'Run this to '+act;
+    const list=document.getElementById('cmd-list'); list.innerHTML='';
+    cmds.forEach(c=>{ const d=document.createElement('div'); d.className='cmd';
+      d.innerHTML=`<code>${c}</code><button class="copy" data-c="${c}">copy</button>`; list.appendChild(d); });
+    list.querySelectorAll('.copy').forEach(b=>b.onclick=()=>{navigator.clipboard?.writeText(b.dataset.c); const t=b.textContent;b.textContent='copied';setTimeout(()=>b.textContent=t,1100);});
+    document.getElementById('cmd-self').style.display = isSelf ? 'flex' : 'none';
+    document.getElementById('cmd-recheck').onclick=()=>{ closeAll(); applyResult(act); };
+    open('m-cmd');
+  }
+  function applyResult(act){
+    if(act==='pause') st='paused'; if(act==='resume') st='live'; if(act==='remove') st='stopped';
+    render();
+  }
+  render();
+</script>
+</body>
+</html>

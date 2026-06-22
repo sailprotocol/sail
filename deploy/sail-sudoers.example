@@ -14,4 +14,4 @@
 # exactly these two units — NOT arbitrary file writes. The one-time unit-file installation that
 # phoenixd provisioning needs (copying into /etc/systemd/system) is left as a manual sudo step on
 # purpose, so this rule can't be used to drop in an arbitrary unit.
-rob ALL=(root) NOPASSWD: /usr/bin/systemctl restart sail-host, /usr/bin/systemctl start sail-host, /usr/bin/systemctl stop sail-host, /usr/bin/systemctl restart phoenixd, /usr/bin/systemctl start phoenixd, /usr/bin/systemctl enable --now phoenixd, /usr/bin/systemctl daemon-reload
+rob ALL=(root) NOPASSWD: /usr/bin/systemctl restart sail-host, /usr/bin/systemctl start sail-host, /usr/bin/systemctl stop sail-host, /usr/bin/systemctl disable --now sail-host, /usr/bin/systemctl restart phoenixd, /usr/bin/systemctl start phoenixd, /usr/bin/systemctl enable --now phoenixd, /usr/bin/systemctl daemon-reload

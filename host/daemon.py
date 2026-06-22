@@ -546,3 +546,41 @@ def setup_golive(request: Request):
         return _NOT_FOUND
     from host import config_writer
     return config_writer.restart_service()
+
+
+# --- host controls (LOCAL ONLY) ---------------------------------------------
+# Pause/Resume/Stop&remove the sail-host systemd unit. Same .onion gate as the dashboard. All reuse
+# config_writer.service_command (try `sudo -n`, else surface the command) — no new mechanism. None
+# of these touch ~/.phoenix, the onion key, or the nsec; remove only affects the systemd unit.
+@app.post("/api/control/pause")
+def control_pause(request: Request):
+    """Stop the service: listing goes stale, daemon stops. Resume brings the same identity back."""
+    if not _is_local(request):
+        return _NOT_FOUND
+    from host import config_writer
+    return config_writer.service_command("stop")
+
+
+@app.post("/api/control/resume")
+def control_resume(request: Request):
+    if not _is_local(request):
+        return _NOT_FOUND
+    from host import config_writer
+    return config_writer.service_command("start")
+
+
+@app.post("/api/control/remove")
+async def control_remove(request: Request):
+    """Disable + stop the unit now; the unit-FILE deletion still needs a manual sudo step (we never
+    auto-rm a system unit), so those commands are surfaced. Gated by type-to-confirm. Funds/keys in
+    ~/.phoenix are NOT touched."""
+    if not _is_local(request):
+        return _NOT_FOUND
+    if (await request.json()).get("confirm") != "remove":
+        return JSONResponse({"error": "type-to-confirm required"}, status_code=400)
+    from host import config_writer
+    svc = config_writer.SERVICE
+    disable = config_writer.service_command("disable", flags=("--now",))
+    return {"disable": disable,
+            "manual_commands": [f"sudo rm /etc/systemd/system/{svc}.service",
+                                "sudo systemctl daemon-reload"]}

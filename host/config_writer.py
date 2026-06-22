@@ -20,7 +20,7 @@ import re
 import subprocess
 import tempfile
 
-SERVICE = "sail-host"
+SERVICE = os.getenv("SAIL_SERVICE", "sail-host")  # overridable so controls can be tested off a throwaway unit
 
 
 def env_host_path() -> pathlib.Path:
@@ -126,17 +126,26 @@ def model_env(name: str) -> dict[str, str]:
 
 
 # --- service restart --------------------------------------------------------
-def restart_service(service: str = SERVICE) -> dict:
-    """Try a passwordless restart; if sudo isn't permitted (no deploy/sail-sudoers installed),
-    report the command for the operator to run instead. Returns a JSON-able dict either way."""
-    cmd = ["sudo", "-n", "systemctl", "restart", service]
+def service_command(action: str, service: str | None = None, flags: tuple[str, ...] = ()) -> dict:
+    """Run `sudo -n systemctl <action> [flags] <service>` — the chosen "try sudo -n, else surface
+    the command" mechanism, shared by restart/pause/resume/remove. Returns {ok: True} on success,
+    else {ok: False, command, error} with the exact command for the operator to run by hand."""
+    service = service or SERVICE
+    args = ["systemctl", action, *flags, service]
+    human = "sudo " + " ".join(args)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        proc = subprocess.run(["sudo", "-n", *args], capture_output=True, text=True, timeout=30)
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        return {"restarted": False, "restart_required": True,
-                "command": f"sudo systemctl restart {service}", "error": str(e)}
+        return {"ok": False, "command": human, "error": str(e)}
     if proc.returncode == 0:
+        return {"ok": True}
+    return {"ok": False, "command": human, "error": (proc.stderr or proc.stdout).strip()[:200]}
+
+
+def restart_service(service: str | None = None) -> dict:
+    """Legacy-shaped wrapper (go-live / config-writer flows read restart_required/restarted)."""
+    r = service_command("restart", service)
+    if r.get("ok"):
         return {"restarted": True}
     return {"restarted": False, "restart_required": True,
-            "command": f"sudo systemctl restart {service}",
-            "error": (proc.stderr or proc.stdout).strip()[:200]}
+            "command": r["command"], "error": r.get("error", "")}
