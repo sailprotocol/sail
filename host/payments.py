@@ -4,11 +4,12 @@ Lightning backends.
 The host issues invoices and verifies payment via one of these. Phase 0 uses
 MockLightning (self-contained, no node). Phase 1 swaps in LndLightning.
 
-Select with env: PAYMENTS=mock (default) | lnd
+Select with env: PAYMENTS=mock (default) | lnd | phoenixd
 """
 from __future__ import annotations
 
 import base64
+import math
 import os
 import pathlib
 import secrets
@@ -16,6 +17,14 @@ import secrets
 import httpx
 
 from shared.l402 import sha256_hex
+
+
+def _whole_sats(amount_msat: int) -> int:
+    """msat -> whole sats for backends that mint BOLT11 in sats (phoenixd). Positive, with a
+    1-sat floor so sub-sat pricing can't request an un-mintable invoice."""
+    if amount_msat is None or amount_msat <= 0:
+        raise ValueError(f"invoice amount must be positive msat, got {amount_msat!r}")
+    return max(1, math.ceil(amount_msat / 1000))
 
 
 class LightningBackend:
@@ -107,10 +116,50 @@ class LndLightning(LightningBackend):
         return r.json().get("state") == "SETTLED"
 
 
+class PhoenixdLightning(LightningBackend):
+    """phoenixd — self-custodial node with auto-liquidity, over its local HTTP API.
+
+    The operator runs phoenixd (Apache-2.0, by ACINQ) which serves http://127.0.0.1:9740 with
+    HTTP Basic auth (empty username + the auto-generated http-password). It mints normal BOLT11
+    invoices, so the L402 flow / client / relays are unchanged. Connection details from env only:
+      PHOENIXD_API_URL       default http://127.0.0.1:9740
+      PHOENIXD_API_PASSWORD  the http-password from ~/.phoenix/phoenix.conf (secret)
+    """
+
+    def __init__(self) -> None:
+        base = os.getenv("PHOENIXD_API_URL", "http://127.0.0.1:9740").rstrip("/")
+        password = os.environ["PHOENIXD_API_PASSWORD"]
+        # Basic auth, empty username + the http-password (phoenixd's scheme). localhost -> fast.
+        self._client = httpx.Client(base_url=base, auth=("", password), timeout=10.0)
+
+    def create_invoice(self, amount_msat: int, expiry_seconds: int | None = None) -> tuple[str, str]:
+        data = {"amountSat": str(_whole_sats(amount_msat)), "description": "SAIL inference"}
+        if expiry_seconds is not None:
+            data["expirySeconds"] = str(expiry_seconds)
+        try:
+            r = self._client.post("/createinvoice", data=data)
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"phoenixd unreachable at {self._client.base_url}: {e}") from e
+        r.raise_for_status()
+        j = r.json()
+        return j["serialized"], j["paymentHash"]  # serialized = BOLT11
+
+    def is_settled(self, payment_hash_hex: str) -> bool:
+        try:
+            r = self._client.get(f"/payments/incoming/{payment_hash_hex}")
+        except httpx.HTTPError:
+            return False  # phoenixd not ready / unreachable -> treat as unpaid
+        if r.status_code != 200:
+            return False  # unknown hash or error -> unpaid
+        return bool(r.json().get("isPaid"))
+
+
 def get_backend() -> LightningBackend:
     kind = os.getenv("PAYMENTS", "mock").lower()
     if kind == "mock":
         return MockLightning()
     if kind == "lnd":
         return LndLightning()
+    if kind == "phoenixd":
+        return PhoenixdLightning()
     raise ValueError(f"unknown PAYMENTS backend: {kind}")

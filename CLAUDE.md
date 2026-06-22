@@ -37,9 +37,10 @@ client, relays). See `ROADMAP.md` for phases.
 - Two filled, gitignored files for dev — one per Polar node: the host process uses
   `ENV_FILE=.env.host`, the client uses `ENV_FILE=.env.client`. Template: `.env.example` (committed).
 - Standardized variable names:
-  - `PAYMENTS` = `mock` | `lnd` | `nwc`
-  - `LND_REST_HOST`, `LND_TLS_CERT_PATH`, `LND_MACAROON_PATH` — this process's own LND node (`PAYMENTS=lnd`)
-  - `NWC_URI` (client NWC connection string, secret) / `NWC_PATH` (GUI store, gitignored) — `PAYMENTS=nwc`, non-custodial
+  - `PAYMENTS` = `mock` | `phoenixd` | `lnd` | `nwc` (host receive tiers; nwc is client-side pay)
+  - `PHOENIXD_API_URL`, `PHOENIXD_API_PASSWORD` (secret) — self-custodial phoenixd node (`PAYMENTS=phoenixd`, recommended default)
+  - `LND_REST_HOST`, `LND_TLS_CERT_PATH`, `LND_MACAROON_PATH` — this process's own LND node (`PAYMENTS=lnd`, most sovereign)
+  - `NWC_URI` (NWC connection string, secret) / `NWC_PATH` (GUI store, gitignored) — `PAYMENTS=nwc`, client pays from own wallet
   - `MODEL` = `mock` | `ollama`; `OLLAMA_MODEL`, `OLLAMA_URL`, `OLLAMA_KEEP_ALIVE` (warm model), `CLIENT_READ_TIMEOUT` (client)
   - `REGISTRY` = `local` | `nostr`; `NOSTR_RELAYS` (comma-separated), `NOSTR_HOST_NSEC` (host only, never commit)
   - `TRANSPORT` = `clearnet` | `tor`; `TOR_CONTROL_PORT`, `ONION_KEY_PATH` (host, key never commit), `TOR_SOCKS` (client)
@@ -51,6 +52,7 @@ client, relays). See `ROADMAP.md` for phases.
 ## Run & test
 - **Smoke test (must always pass):** `PAYMENTS=mock MODEL=mock PYTHONPATH=. .venv/bin/python smoke_test.py`
 - Host (real model + regtest LND): `ENV_FILE=.env.host PYTHONPATH=. .venv/bin/uvicorn host.daemon:app --port 8001`
+- **Mainnet host (canonical):** runs as the `sail-host` **systemd service** — durable, auto-restart, same onion/pubkey across reboots. The manual `uvicorn` line above is for dev/regtest. Manage with `sudo systemctl {start,stop,restart} sail-host`; logs via `journalctl -u sail-host -f`. Host receive backend is selected by `PAYMENTS` — `phoenixd` (recommended), `lnd`, or `mock`.
 - Client CLI (regtest LND): `ENV_FILE=.env.client PYTHONPATH=. .venv/bin/python -m client.cli "your prompt"`
 - Client GUI (local web app): `ENV_FILE=.env.client PYTHONPATH=. .venv/bin/uvicorn client.webapp:app --port 8080` → open `http://127.0.0.1:8080`. CLI + GUI share `client/core.py`. (Tauri/desktop packaging deferred to a later task.)
 
