@@ -181,9 +181,19 @@ def models() -> dict:
 
 @app.post("/v1/inference")
 async def inference(request: Request, authorization: str | None = Header(default=None)):
-    body = await request.json()
+    # Guard the body: junk/empty input must be a clean 400, never a 500 stack trace (a 500 on
+    # garbage is a cheap DoS surface). A well-formed body still flows on to the 402 challenge.
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — any JSON decode failure (empty/malformed) is a bad request
+        return JSONResponse({"error": "request body must be valid JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "request body must be a JSON object"}, status_code=400)
     prompt = body.get("prompt", "")
-    max_tokens = int(body.get("max_tokens", 64))
+    try:
+        max_tokens = int(body.get("max_tokens", 64))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "max_tokens must be an integer"}, status_code=400)
 
     if not moderation.is_model_allowed(_model.name):
         return JSONResponse({"error": "model not on network allowlist"}, status_code=451)
@@ -279,9 +289,17 @@ def _bolt11_state(s: dict) -> str:
 
 @app.post("/v1/inference/bolt11")
 async def bolt11_create(request: Request):
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — empty/malformed body -> 400, same public DoS guard as /v1/inference
+        return JSONResponse({"error": "request body must be valid JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "request body must be a JSON object"}, status_code=400)
     prompt = body.get("prompt", "")
-    max_tokens = int(body.get("max_tokens", 64)) or 64
+    try:
+        max_tokens = int(body.get("max_tokens", 64)) or 64
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "max_tokens must be an integer"}, status_code=400)
     if not moderation.is_model_allowed(_model.name):
         return JSONResponse({"error": "model not on network allowlist"}, status_code=451)
     # Evict expired bolt11 sessions opportunistically.
@@ -465,7 +483,6 @@ def setup_detect(request: Request):
     """Step 1: real GPU / Ollama / Tor checks for the machine."""
     if not _is_local(request):
         return _NOT_FOUND
-    import socket
     import subprocess
 
     # GPU via nvidia-smi (Ollama can still run on CPU, so absence is a warning, not a failure).
@@ -486,12 +503,8 @@ def setup_detect(request: Request):
 
     # Tor control port reachable (needed only for TRANSPORT=tor, but we always report it).
     cp = int(os.getenv("TOR_CONTROL_PORT", "9051"))
-    tor = {"ok": False, "detail": f"control port {cp} not reachable"}
-    try:
-        with socket.create_connection(("127.0.0.1", cp), timeout=3):
-            tor = {"ok": True, "detail": f"control port {cp} reachable · onion ready"}
-    except OSError:
-        pass
+    tor = ({"ok": True, "detail": f"control port {cp} reachable · onion ready"} if _tor_reachable()
+           else {"ok": False, "detail": f"control port {cp} not reachable"})
 
     return {"gpu": gpu, "ollama": ollama, "tor": tor, "models": models}
 
@@ -597,14 +610,30 @@ async def setup_payout(request: Request):
     return {"ok": True, "tier": tier}
 
 
+def _tor_reachable() -> bool:
+    """Is Tor's control port up (so we can provision a .onion)?"""
+    import socket
+    cp = int(os.getenv("TOR_CONTROL_PORT", "9051"))
+    try:
+        with socket.create_connection(("127.0.0.1", cp), timeout=3):
+            return True
+    except OSError:
+        return False
+
+
 @app.post("/api/setup/golive")
 def setup_golive(request: Request):
-    """Final step: restart sail-host so it loads the new config, creates the onion, and publishes
-    the listing. Restart may kill this very process — the wizard then polls /api/status until live."""
+    """Final step: pick the transport (Tor when its control port is reachable, else a deliberate
+    clearnet fallback), write it, then restart sail-host so it loads the new config, creates the
+    onion, and publishes. Restart may kill this process — the wizard polls /api/status until live."""
     if not _is_local(request):
         return _NOT_FOUND
     from host import config_writer
-    return config_writer.restart_service()
+    transport_mode = "tor" if _tor_reachable() else "clearnet"
+    config_writer.update_env_file({"TRANSPORT": transport_mode})  # was silently defaulting to clearnet
+    result = config_writer.restart_service()
+    result["transport"] = transport_mode
+    return result
 
 
 # --- host controls (LOCAL ONLY) ---------------------------------------------
