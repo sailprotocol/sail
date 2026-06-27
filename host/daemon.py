@@ -173,6 +173,14 @@ def publish_listing() -> None:
     if pow_target < pow_min:
         print(f"[host] WARNING: POW_TARGET ({pow_target}) < client POW_MIN_DIFFICULTY ({pow_min}) "
               f"— clients will reject this listing. Raise POW_TARGET.")
+    # Tiny per-chunk amounts are hard to pay: some wallets reject sub-~10-sat invoices, and a fresh
+    # phoenixd with no inbound channel can't receive ANY amount until one is bootstrapped (~25-35k).
+    chunk_msat = PRICE_MSAT_PER_TOKEN * CHUNK_TOKENS
+    if chunk_msat < 10_000:
+        print(f"[host] NOTE: per-chunk payment is {chunk_msat // 1000} sat "
+              f"({PRICE_MSAT_PER_TOKEN}msat × {CHUNK_TOKENS} tokens). NWC/Lightning payers may "
+              f"reject very small invoices; consider a larger CHUNK_TOKENS. On phoenixd you also "
+              f"can't receive until an initial inbound payment opens a channel (~25-35k sat).")
     if TRANSPORT == "tor":
         # Expose the daemon as a .onion and advertise THAT as the endpoint.
         ENDPOINT = transport.setup_onion(PORT)

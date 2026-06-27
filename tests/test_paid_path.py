@@ -106,6 +106,49 @@ def test_nwc_pay_fails_clean_on_timeout():
         wallet.load_uri, core._run_async, core._nwc = orig_uri, orig_run, orig_nwc
 
 
+def test_nwc_pay_premature_exit_gets_actionable_hint():
+    """The opaque 'Generic: premature exit' (no NIP-47 response) must surface the real string AND a
+    cause hint (relay flaky / phoenixd no-channel), not a bare 'premature exit'."""
+    from client import core, wallet
+    orig_uri, orig_run, orig_nwc = wallet.load_uri, core._run_async, core._nwc
+    try:
+        wallet.load_uri = lambda: "nostr+walletconnect://abc?relay=wss://r&secret=00"
+        core._nwc = object()
+
+        def _boom(f):
+            raise Exception("Generic: premature exit")
+        core._run_async = _boom
+        try:
+            core.nwc_pay("lnbc1fake")
+            assert False
+        except RuntimeError as e:
+            m = str(e)
+            assert "premature exit" in m, m          # the REAL error is preserved
+            assert "phoenixd" in m and "channel" in m, m  # plus the actionable cause
+    finally:
+        wallet.load_uri, core._run_async, core._nwc = orig_uri, orig_run, orig_nwc
+
+
+def test_nwc_pay_wallet_rejection_surfaced_verbatim():
+    """A structured wallet rejection (NIP-47 code/message) must come through verbatim."""
+    from client import core, wallet
+    orig_uri, orig_run, orig_nwc = wallet.load_uri, core._run_async, core._nwc
+    try:
+        wallet.load_uri = lambda: "nostr+walletconnect://abc?relay=wss://r&secret=00"
+        core._nwc = object()
+
+        def _boom(f):
+            raise Exception("PAYMENT_FAILED: no_route to destination")
+        core._run_async = _boom
+        try:
+            core.nwc_pay("lnbc1fake")
+            assert False
+        except RuntimeError as e:
+            assert "PAYMENT_FAILED: no_route to destination" in str(e), str(e)
+    finally:
+        wallet.load_uri, core._run_async, core._nwc = orig_uri, orig_run, orig_nwc
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
