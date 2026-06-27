@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import sys
 import time
 from typing import Iterator
 
@@ -21,6 +22,12 @@ from shared.l402 import NEXT_MARKER, DONE_MARKER, ERROR_MARKER
 from host import moderation
 from client import reputation
 from client import wallet
+
+
+def _clog(msg: str) -> None:
+    """Step trace to stderr (keeps stdout clean for streamed tokens) so the paid path is
+    diagnosable: which step ran, where it stalled."""
+    print(f"[client] {msg}", file=sys.stderr, flush=True)
 
 
 class PaymentConfigError(RuntimeError):
@@ -97,6 +104,9 @@ def _run_async(coro_factory):
 _nwc = None  # cached Nwc client, so the wallet relay connection is reused across chunks
 
 
+NWC_PAY_TIMEOUT = float(os.getenv("NWC_PAY_TIMEOUT", "120"))  # cap so a stuck wallet/relay fails clean
+
+
 def nwc_pay(invoice: str) -> str:
     """Pay a BOLT11 invoice from the user's OWN wallet over NWC (NIP-47) -> preimage hex.
     Non-custodial: this only relays a pay_invoice request to the user's wallet."""
@@ -104,14 +114,29 @@ def nwc_pay(invoice: str) -> str:
     uri = wallet.load_uri()
     if not uri:
         raise RuntimeError("no wallet connected — connect one in the GUI or set NWC_URI")
+    import asyncio
     from nostr_sdk import Nwc, NostrWalletConnectUri, PayInvoiceRequest
     if _nwc is None:
         _nwc = Nwc(NostrWalletConnectUri.parse(uri))
 
     async def _go():
-        return await _nwc.pay_invoice(PayInvoiceRequest(id=None, invoice=invoice, amount=None))
+        # Bound the wait: a hung NWC payment used to make the client never re-request, so the host
+        # only ever saw the 402 and the operator saw a silent stall. Fail cleanly instead.
+        return await asyncio.wait_for(
+            _nwc.pay_invoice(PayInvoiceRequest(id=None, invoice=invoice, amount=None)),
+            NWC_PAY_TIMEOUT)
 
-    return _run_async(_go).preimage
+    try:
+        resp = _run_async(_go)
+    except Exception as e:  # noqa: BLE001 — timeout / relay / wallet failure -> a clear payment error
+        raise RuntimeError(f"NWC payment failed: {type(e).__name__}: {str(e)[:120]}") from e
+    preimage = getattr(resp, "preimage", None)
+    if not preimage:
+        # Some wallets settle but return no preimage — we then can't prove payment to the host, so
+        # the metered (preimage-reveal) flow can't continue. Surface it instead of sending empty creds.
+        raise RuntimeError("NWC wallet returned no payment preimage — this wallet can't be used for "
+                           "metered streaming (try the BOLT11 option)")
+    return preimage
 
 
 def pay_invoice(endpoint: str, ch: dict, proxy: str | None = None) -> str:
@@ -150,6 +175,7 @@ def run_inference(host, prompt: str, max_tokens: int = 64) -> Iterator[dict]:
     penalize = True  # a CLIENT-side config error (mock-vs-real) must not bury the host's reputation
     spent_msat = 0
     latency_ms = 0.0
+    mode = os.getenv("PAYMENTS", "mock").lower()
     try:
         # Start a session: no creds -> the first chunk's 402 challenge.
         r = httpx.post(f"{ep}/v1/inference",
@@ -157,11 +183,15 @@ def run_inference(host, prompt: str, max_tokens: int = 64) -> Iterator[dict]:
         if r.status_code != 402:
             raise RuntimeError(f"expected 402, got {r.status_code}: {r.text[:200]}")
         ch = r.json()
+        _clog(f"got 402 challenge hash={ch.get('payment_hash','')[:8]} "
+              f"amount={ch.get('amount_msat')}msat — paying via {mode}")
 
         # Pay each chunk, stream it, follow the trailer to the next chunk until done.
         while True:
             preimage = pay_invoice(ep, ch, proxy)
             spent_msat += ch["amount_msat"]
+            _clog(f"paid (preimage_len={len(preimage or '')}) — re-requesting chunk over "
+                  f"{'tor' if proxy else 'direct'}")
             auth = f"L402 {ch['macaroon']}:{preimage}"
             with httpx.stream("POST", f"{ep}/v1/inference",
                               json={"session_id": ch.get("session_id")},
@@ -171,6 +201,9 @@ def run_inference(host, prompt: str, max_tokens: int = 64) -> Iterator[dict]:
                     raise RuntimeError(
                         f"chunk failed: {s.status_code} {s.read().decode(errors='replace')[:200]}")
                 body = "".join(s.iter_text())  # one chunk is small; buffer to parse the trailer
+            trailer = ("ERROR" if ERROR_MARKER in body else "DONE" if DONE_MARKER in body
+                       else "NEXT" if NEXT_MARKER in body else "none")
+            _clog(f"chunk received ({len(body)}B, trailer={trailer})")
             if ERROR_MARKER in body:
                 # Host failed to serve AFTER we paid — clean typed end, not a silent cut.
                 text, _, meta = body.partition(ERROR_MARKER)

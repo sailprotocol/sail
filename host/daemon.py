@@ -227,22 +227,29 @@ async def inference(request: Request, authorization: str | None = Header(default
         }
         ch = _issue_chunk_challenge(sid)
         l402 = L402Challenge(ch["macaroon"], ch["invoice"], ch["payment_hash"], ch["amount_msat"])
+        print(f"[host] L402 challenge issued sid={sid} hash={ch['payment_hash'][:8]} "
+              f"amount={ch['amount_msat']}msat mac={ch['macaroon'][:8]}")
         return JSONResponse(ch, status_code=402,
                             headers={"WWW-Authenticate": l402.www_authenticate()})
 
     # Valid creds -> redeem one paid chunk: verify, stream up to chunk tokens, then either
     # hand back the next chunk's challenge (__L402_NEXT__) or finish (__L402_DONE__).
     macaroon, preimage = creds
+    print(f"[host] L402 paid-request received mac={macaroon[:8]} preimage_len={len(preimage or '')}")
     bound = _pending.get(macaroon)
     if bound is None:
+        print(f"[host] L402 REJECT unknown/expired macaroon mac={macaroon[:8]}")
         return JSONResponse({"error": "unknown macaroon"}, status_code=402)
     sid, payment_hash, amount_msat, chunk = bound
     if not verify(preimage, payment_hash):
+        print(f"[host] L402 REJECT invalid preimage hash={payment_hash[:8]} mac={macaroon[:8]}")
         return JSONResponse({"error": "invalid preimage"}, status_code=402)
     del _pending[macaroon]  # single-use
     s = _sessions.get(sid)
     if s is None:
+        print(f"[host] L402 REJECT session expired sid={sid} mac={macaroon[:8]}")
         return JSONResponse({"error": "unknown or expired session"}, status_code=410)
+    print(f"[host] L402 verified -> serving sid={sid} chunk={chunk}tok emitted={s['emitted']}")
 
     def chunk_stream():
         # phase tracks WHERE we are if serving aborts, so the host log pinpoints the cause
