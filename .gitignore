@@ -8,6 +8,9 @@ registry/
 # Tor onion service private key — secret, never commit.
 *.key
 onion.key
+# Host Nostr identity key (nsec) — secret, never commit (default lives in ~/.config/inference-net).
+*.nsec
+host.nsec
 # Client-side reputation (local first-party experience) — machine-specific, not committed.
 client_reputation.json
 # Client session history (local) — machine-specific, not committed.

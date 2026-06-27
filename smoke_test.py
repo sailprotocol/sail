@@ -12,6 +12,8 @@ os.environ.setdefault("MODEL", "mock")
 os.environ.setdefault("POW_TARGET", "8")          # trivial difficulty: mines instantly
 os.environ.setdefault("POW_MIN_DIFFICULTY", "8")  # client rejects listings below this
 os.environ.setdefault("MODEL_ALLOWLIST", "mock-echo:1b")  # enforce allowlist; mock is allowed
+os.environ.setdefault("HOST_KEY_PATH", "/tmp/sail-smoke-host.nsec")  # hermetic: don't touch ~/.config
+os.environ.setdefault("LISTING_REANNOUNCE_SECONDS", "0")  # no heartbeat thread during the test
 
 from fastapi.testclient import TestClient
 from host.daemon import app, PRICE_MSAT_PER_TOKEN, BOLT11_EXPIRY_SECONDS, _ln

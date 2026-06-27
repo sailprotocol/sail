@@ -92,8 +92,9 @@ def _run(coro_factory):
 class NostrRegistry(RegistryBackend):
     """Real Nostr publish/subscribe over the relays in NOSTR_RELAYS.
 
-    The host signs with the secret key in NOSTR_HOST_NSEC (env only, never committed); its
-    Nostr pubkey becomes the listing identity. Clients need no key to discover.
+    The host signs with its persistent identity key (shared/identity.py: NOSTR_HOST_NSEC env, or a
+    generated+persisted key file); its Nostr pubkey is the stable listing identity. Clients need no
+    key to discover.
     """
 
     def __init__(self) -> None:
@@ -104,14 +105,16 @@ class NostrRegistry(RegistryBackend):
             )
 
     def host_pubkey(self) -> str | None:
-        from nostr_sdk import Keys
+        from shared import identity
 
-        return Keys.parse(os.environ["NOSTR_HOST_NSEC"]).public_key().to_hex()
+        return identity.host_pubkey_hex()
 
     def publish(self, listing: HostListing) -> None:
-        from nostr_sdk import Client, EventBuilder, Keys, Kind, NostrSigner, RelayUrl, Tag
+        from nostr_sdk import Client, EventBuilder, Kind, NostrSigner, RelayUrl, Tag
 
-        keys = Keys.parse(os.environ["NOSTR_HOST_NSEC"])
+        from shared import identity
+
+        keys = identity.host_keys()  # persisted host key (env nsec, file, or first-run gen)
         ev = listing.to_nostr_event()  # reuse the canonical content + tags
         builder = EventBuilder(Kind(LISTING_KIND), ev["content"]).tags(
             [Tag.parse(t) for t in ev["tags"]]

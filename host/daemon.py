@@ -17,6 +17,7 @@ import collections
 import os
 import pathlib
 import secrets
+import threading
 import time
 
 from fastapi import FastAPI, Header, Request
@@ -41,9 +42,10 @@ from host import transport
 app = FastAPI(title="SAIL host")
 
 # --- host identity & config -------------------------------------------------
-# With REGISTRY=nostr the listing identity IS the host's Nostr pubkey; otherwise (local)
-# fall back to HOST_PUBKEY or a random dev identity.
-PUBKEY = registry.host_identity() or os.getenv("HOST_PUBKEY", "host_" + secrets.token_hex(8))
+# Stable, persisted Nostr identity (shared/identity.py) — same real pubkey + alias across reboots
+# in EVERY mode (clearnet/local included), generated + persisted on first run. No throwaway keys.
+from shared import identity
+PUBKEY = identity.host_pubkey_hex()
 PORT = int(os.getenv("PORT", "8001"))
 ENDPOINT = os.getenv("HOST_ENDPOINT", f"http://127.0.0.1:{PORT}")
 PRICE_MSAT_PER_TOKEN = int(os.getenv("PRICE_MSAT_PER_TOKEN", "1000"))  # 1 sat/token (demo)
@@ -120,24 +122,55 @@ def _issue_chunk_challenge(sid: str) -> dict:
             "payment_hash": payment_hash, "amount_msat": amount_msat}
 
 
+# How often to re-announce the listing so it stays fresh on public relays (set 0 to disable).
+REANNOUNCE_SECONDS = int(os.getenv("LISTING_REANNOUNCE_SECONDS", "300"))
+
+
+def _build_listing() -> HostListing:
+    return HostListing(
+        pubkey=PUBKEY,
+        endpoint=ENDPOINT,
+        models=[ModelOffer(name=_model.name, price_msat_per_token=PRICE_MSAT_PER_TOKEN,
+                           context_window=8192, modality=_model.modality)],
+    )
+
+
+def _reannounce_loop(interval: int) -> None:
+    """Re-publish the listing periodically. Kind-38111 is a parameterized-replaceable event (stable
+    'd' tag = pubkey), so relays keep/replace the latest — but public relays still drop events over
+    time, so a heartbeat keeps the host discoverable instead of vanishing between client queries."""
+    while True:
+        time.sleep(interval)
+        try:
+            registry.publish(_build_listing())
+            print(f"[host] re-announced listing ({alias_label(PUBKEY)})")
+        except Exception as e:  # noqa: BLE001 — keep the host serving even if a relay hiccups
+            print(f"[host] re-announce failed: {e}")
+
+
 @app.on_event("startup")
 def publish_listing() -> None:
     global ENDPOINT
     # Moderation gate: refuse to start serving a disallowed model, or any image-modality model
     # without a real CSAM matcher. Fail loudly here rather than per-request.
     moderation.assert_can_serve(_model)
+    # PoW floor: if we mine below what clients require, they silently filter us out.
+    pow_target = int(os.getenv("POW_TARGET", "16"))
+    pow_min = int(os.getenv("POW_MIN_DIFFICULTY", "8"))
+    if pow_target < pow_min:
+        print(f"[host] WARNING: POW_TARGET ({pow_target}) < client POW_MIN_DIFFICULTY ({pow_min}) "
+              f"— clients will reject this listing. Raise POW_TARGET.")
     if TRANSPORT == "tor":
         # Expose the daemon as a .onion and advertise THAT as the endpoint.
         ENDPOINT = transport.setup_onion(PORT)
         print(f"[host] tor onion endpoint: {ENDPOINT}")
-    listing = HostListing(
-        pubkey=PUBKEY,
-        endpoint=ENDPOINT,
-        models=[ModelOffer(name=_model.name, price_msat_per_token=PRICE_MSAT_PER_TOKEN,
-                           context_window=8192, modality=_model.modality)],
-    )
-    registry.publish(listing)  # Phase 1: publish signed Nostr event to relays
-    print(f"[host] published listing: {PUBKEY} serving {_model.name} @ {ENDPOINT}")
+    registry.publish(_build_listing())  # signed, PoW-mined, parameterized-replaceable listing
+    print(f"[host] published listing: {alias_label(PUBKEY)} [{PUBKEY}] "
+          f"serving {_model.name} @ {ENDPOINT}")
+    if REANNOUNCE_SECONDS > 0:
+        threading.Thread(target=_reannounce_loop, args=(REANNOUNCE_SECONDS,),
+                         daemon=True, name="sail-reannounce").start()
+        print(f"[host] re-announce heartbeat every {REANNOUNCE_SECONDS}s")
 
 
 @app.get("/v1/models")
