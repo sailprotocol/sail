@@ -38,7 +38,8 @@ def _empty_stats() -> dict:
 
 
 class RegistryBackend:
-    def publish(self, listing: HostListing) -> None:
+    def publish(self, listing: HostListing) -> dict:
+        """Publish a listing; return {"event_id", "success": [relays], "failed": {relay: reason}}."""
         raise NotImplementedError
 
     def discover(self) -> list[HostListing]:
@@ -59,13 +60,14 @@ class LocalRegistry(RegistryBackend):
     def __init__(self) -> None:
         self.dir = pathlib.Path(os.getenv("REGISTRY_DIR", "./registry"))
 
-    def publish(self, listing: HostListing) -> None:
+    def publish(self, listing: HostListing) -> dict:
         self.dir.mkdir(parents=True, exist_ok=True)
         event = listing.to_nostr_event()
         target = _pow_target()
         if target > 0:
             mine(event, target)  # NIP-13 proof-of-work, same as the real Nostr path
         (self.dir / f"{listing.pubkey}.json").write_text(json.dumps(event))
+        return {"event_id": event.get("id", ""), "success": [f"local:{self.dir}"], "failed": {}}
 
     def discover(self) -> list[HostListing]:
         self._stats = _empty_stats()
@@ -128,7 +130,13 @@ class NostrRegistry(RegistryBackend):
 
         return identity.host_pubkey_hex()
 
-    def publish(self, listing: HostListing) -> None:
+    def publish(self, listing: HostListing) -> dict:
+        """Publish the signed kind-38111 listing and RETURN the per-relay outcome
+        {"event_id", "success": [relays], "failed": {relay: reason}} so callers can see whether the
+        relays actually accepted it — a relay rejecting (or never connecting) must not masquerade as
+        success. Waits for the relay connections before sending so a fast shutdown can't drop it."""
+        from datetime import timedelta
+
         from nostr_sdk import Client, EventBuilder, Kind, NostrSigner, RelayUrl, Tag
 
         from shared import identity
@@ -149,10 +157,20 @@ class NostrRegistry(RegistryBackend):
             for url in relays:
                 await client.add_relay(RelayUrl.parse(url))
             await client.connect()
-            await client.send_event(signed)
+            try:
+                # Don't fire-and-forget into a not-yet-open socket then shut down — wait for the
+                # relays to connect first (best effort; returns after the timeout regardless).
+                await client.wait_for_connection(timedelta(seconds=10))
+            except Exception:  # noqa: BLE001 — older nostr-sdk or no relay up; send anyway
+                pass
+            out = await client.send_event(signed)
             await client.shutdown()
+            return out
 
-        _run(_go)
+        out = _run(_go)
+        return {"event_id": out.id.to_hex(),
+                "success": [str(u) for u in out.success],
+                "failed": {str(u): r for u, r in out.failed.items()}}
 
     def discover(self) -> list[HostListing]:
         from datetime import timedelta
@@ -220,8 +238,8 @@ def get_backend() -> RegistryBackend:
     return _backend
 
 
-def publish(listing: HostListing) -> None:
-    get_backend().publish(listing)
+def publish(listing: HostListing) -> dict:
+    return get_backend().publish(listing)
 
 
 def discover() -> list[HostListing]:

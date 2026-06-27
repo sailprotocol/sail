@@ -135,6 +135,20 @@ def _build_listing() -> HostListing:
     )
 
 
+def _log_publish(result: dict, label: str) -> None:
+    """Surface the REAL per-relay outcome so a silent drop can't masquerade as success."""
+    ok = result.get("success", []) if result else []
+    failed = result.get("failed", {}) if result else {}
+    if ok:
+        print(f"[host] {label}: accepted by {len(ok)} relay(s): {', '.join(ok)}")
+    if failed:
+        print(f"[host] {label}: REJECTED by {len(failed)} relay(s): "
+              + "; ".join(f"{r} -> {why}" for r, why in failed.items()))
+    if not ok:
+        print(f"[host] WARNING: {label}: NO relay accepted the listing — it won't be discoverable. "
+              f"Check outbound connectivity to the relays and this host's clock.")
+
+
 def _reannounce_loop(interval: int) -> None:
     """Re-publish the listing periodically. Kind-38111 is a parameterized-replaceable event (stable
     'd' tag = pubkey), so relays keep/replace the latest — but public relays still drop events over
@@ -142,8 +156,7 @@ def _reannounce_loop(interval: int) -> None:
     while True:
         time.sleep(interval)
         try:
-            registry.publish(_build_listing())
-            print(f"[host] re-announced listing ({alias_label(PUBKEY)})")
+            _log_publish(registry.publish(_build_listing()), f"re-announce ({alias_label(PUBKEY)})")
         except Exception as e:  # noqa: BLE001 — keep the host serving even if a relay hiccups
             print(f"[host] re-announce failed: {e}")
 
@@ -164,9 +177,10 @@ def publish_listing() -> None:
         # Expose the daemon as a .onion and advertise THAT as the endpoint.
         ENDPOINT = transport.setup_onion(PORT)
         print(f"[host] tor onion endpoint: {ENDPOINT}")
-    registry.publish(_build_listing())  # signed, PoW-mined, parameterized-replaceable listing
+    result = registry.publish(_build_listing())  # signed, PoW-mined, parameterized-replaceable
     print(f"[host] published listing: {alias_label(PUBKEY)} [{PUBKEY}] "
           f"serving {_model.name} @ {ENDPOINT}")
+    _log_publish(result, "publish")  # show which relays actually accepted (or that none did)
     if REANNOUNCE_SECONDS > 0:
         threading.Thread(target=_reannounce_loop, args=(REANNOUNCE_SECONDS,),
                          daemon=True, name="sail-reannounce").start()
