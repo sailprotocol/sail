@@ -264,6 +264,11 @@ async function send() {
         else if (ev.type === "error") {
           if (ev.kind === "unreachable") { $("notice").textContent = "Host unreachable — try another host or press Refresh."; $("status").textContent = ""; }
           else if (ev.kind === "expired") { $("notice").textContent = "Invoice expired — press Send to get a new one."; $("status").textContent = ""; }
+          else if (ev.kind === "serve_failed") {
+            // host failed mid-stream AFTER payment: keep the partial output, show what was spent
+            $("notice").textContent = "Host failed to serve (premature exit) — " + (ev.message || "");
+            $("status").innerHTML = `host failed · spent <b>${sat(ev.spent_msat)} sat</b> for ${ev.delivered_tokens ?? "?"} tokens · no further chunks charged`;
+          }
           else { renderConversation(prompt, "[error] " + ev.message, true); $("status").textContent = "failed"; }
         }
       }

@@ -94,6 +94,11 @@ def main() -> None:
             print(f"\n\n[client] done. spent {ev['spent_msat']} msat "
                   f"(~{ev['spent_msat'] / 1000:.0f} sat) in {ev['latency_ms'] / 1000:.1f}s.")
         elif ev["type"] == "error":
+            if ev.get("kind") == "serve_failed":
+                sats = (ev.get("spent_msat") or 0) / 1000
+                sys.exit(f"\n\n[client] host failed to serve — {ev['message']}. "
+                         f"{sats:.0f} sat spent for {ev.get('delivered_tokens', 0)} token(s) "
+                         f"delivered (partial output above; no further chunks charged).")
             if ev.get("kind") == "config":
                 sys.exit(f"\n[client] {ev['message']}.\n[client] This is a client-side mode "
                          f"mismatch — the host wasn't penalized. Configure a wallet (PAYMENTS=nwc "

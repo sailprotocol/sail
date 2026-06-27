@@ -17,7 +17,7 @@ from typing import Iterator
 import httpx
 
 from shared import registry
-from shared.l402 import NEXT_MARKER, DONE_MARKER
+from shared.l402 import NEXT_MARKER, DONE_MARKER, ERROR_MARKER
 from host import moderation
 from client import reputation
 from client import wallet
@@ -171,6 +171,20 @@ def run_inference(host, prompt: str, max_tokens: int = 64) -> Iterator[dict]:
                     raise RuntimeError(
                         f"chunk failed: {s.status_code} {s.read().decode(errors='replace')[:200]}")
                 body = "".join(s.iter_text())  # one chunk is small; buffer to parse the trailer
+            if ERROR_MARKER in body:
+                # Host failed to serve AFTER we paid — clean typed end, not a silent cut.
+                text, _, meta = body.partition(ERROR_MARKER)
+                if text:
+                    yield {"type": "token", "text": text}  # whatever partial output arrived
+                try:
+                    info = json.loads(meta)
+                except Exception:  # noqa: BLE001
+                    info = {}
+                yield {"type": "error", "kind": "serve_failed",
+                       "message": info.get("message", "host failed to serve"),
+                       "spent_msat": spent_msat,                       # what we actually paid
+                       "delivered_tokens": info.get("delivered_tokens")}
+                return  # host fault: finally records the failed attempt against reputation
             if DONE_MARKER in body:
                 text = body.partition(DONE_MARKER)[0]
                 if text:

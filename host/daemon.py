@@ -29,7 +29,7 @@ load_env()  # before any module-level os.getenv below
 
 from shared.l402 import (
     L402Challenge, new_macaroon, parse_authorization, verify,
-    next_trailer, done_trailer,
+    next_trailer, done_trailer, error_trailer,
 )
 from shared.alias import derive_alias, alias_label
 from shared.listing import HostListing, ModelOffer
@@ -245,48 +245,74 @@ async def inference(request: Request, authorization: str | None = Header(default
         return JSONResponse({"error": "unknown or expired session"}, status_code=410)
 
     def chunk_stream():
-        if s["gen"] is None:
-            s["gen"] = _model.stream(s["prompt"])  # lazy: only after first payment
-        gen = s["gen"]
+        # phase tracks WHERE we are if serving aborts, so the host log pinpoints the cause
+        # (model cold-load vs mid-stream read vs issuing the next chunk's invoice).
+        phase = "start"
+        try:
+            if s["gen"] is None:
+                phase = "model_open"
+                s["gen"] = _model.stream(s["prompt"])  # lazy: only after first payment
+            gen = s["gen"]
 
-        def _next_token():
-            if s["buf"] is not _NOTHING:  # deliver the look-ahead token first
-                tok, s["buf"] = s["buf"], _NOTHING
-                return tok
-            return next(gen)  # raises StopIteration when the model is done
+            def _next_token():
+                if s["buf"] is not _NOTHING:  # deliver the look-ahead token first
+                    tok, s["buf"] = s["buf"], _NOTHING
+                    return tok
+                return next(gen)  # raises StopIteration when the model is done
 
-        allow = min(chunk, s["max_tokens"] - s["emitted"])
-        exhausted = False
-        for _ in range(allow):
+            allow = min(chunk, s["max_tokens"] - s["emitted"])
+            exhausted = False
+            for _ in range(allow):
+                phase = "model_read"
+                try:
+                    tok = _next_token()
+                except StopIteration:
+                    exhausted = True
+                    break
+                s["emitted"] += 1
+                yield tok
+
+            # Look ahead one token: only invoice another chunk if more output actually exists
+            # (and we're under max_tokens) — this avoids billing an empty trailing chunk.
+            more = False
+            if not exhausted and s["emitted"] < s["max_tokens"]:
+                phase = "model_lookahead"
+                try:
+                    s["buf"] = next(gen)
+                    more = True
+                except StopIteration:
+                    s["buf"] = _NOTHING
+
+            if more:
+                phase = "issue_invoice"  # phoenixd/LND/NWC mint for the NEXT chunk
+                trailer = next_trailer(_issue_chunk_challenge(sid))
+                yield trailer
+            else:
+                spent = s["charged_msat"]
+                try:
+                    gen.close()
+                except Exception:
+                    pass
+                _record_settled(sid[:4], s["emitted"], spent)
+                _sessions.pop(sid, None)
+                yield done_trailer(spent)
+        except Exception as e:  # noqa: BLE001 — pay-then-fail: end cleanly, don't cut the stream
+            spent = s.get("charged_msat", 0)      # what the client has paid (in-flight chunk only)
+            delivered = s.get("emitted", 0)
+            print(f"[host] serve ABORTED sid={sid[:4]} phase={phase} delivered={delivered}tok "
+                  f"spent={spent}msat: {type(e).__name__}: {str(e)[:200]}")
             try:
-                tok = _next_token()
-            except StopIteration:
-                exhausted = True
-                break
-            s["emitted"] += 1
-            yield tok
-
-        # Look ahead one token: only invoice another chunk if more output actually exists
-        # (and we're under max_tokens) — this avoids billing an empty trailing chunk.
-        more = False
-        if not exhausted and s["emitted"] < s["max_tokens"]:
-            try:
-                s["buf"] = next(gen)
-                more = True
-            except StopIteration:
-                s["buf"] = _NOTHING
-
-        if more:
-            yield next_trailer(_issue_chunk_challenge(sid))
-        else:
-            spent = s["charged_msat"]
-            try:
-                gen.close()
+                if s.get("gen"):
+                    s["gen"].close()
             except Exception:
                 pass
-            _record_settled(sid[:4], s["emitted"], spent)
+            # Stop here: no further chunk is charged. We can't auto-refund the in-flight chunk over
+            # LN in v1, so we report exactly what was spent vs delivered (loss bounded to <1 chunk).
+            _record_settled(sid[:4], delivered, spent)
             _sessions.pop(sid, None)
-            yield done_trailer(spent)
+            yield error_trailer(message="host failed to serve the model (stream ended early)",
+                                spent_msat=spent, delivered_tokens=delivered,
+                                reason=f"{phase}:{type(e).__name__}")
 
     return StreamingResponse(chunk_stream(), media_type="text/plain")
 

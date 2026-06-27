@@ -30,9 +30,11 @@ def sha256_hex(b: bytes) -> str:
 # A paid chunk's response is a text/plain stream of tokens followed by ONE trailer line:
 #   __L402_NEXT__:<json challenge>   another chunk remains; pay it to continue
 #   __L402_DONE__:<json {spent_msat}>  generation finished; stop
+#   __L402_ERROR__:<json {...}>      serving failed mid-stream; a CLEAN typed end (not a cut)
 # Reuses the in-band trailer convention of __SPENT_MSAT__ so the stream stays plain text.
 NEXT_MARKER = "__L402_NEXT__:"
 DONE_MARKER = "__L402_DONE__:"
+ERROR_MARKER = "__L402_ERROR__:"
 
 
 def next_trailer(challenge: dict) -> str:
@@ -43,6 +45,14 @@ def next_trailer(challenge: dict) -> str:
 def done_trailer(spent_msat: int) -> str:
     """Trailer telling the client generation is complete and what it was billed."""
     return DONE_MARKER + json.dumps({"spent_msat": spent_msat})
+
+
+def error_trailer(message: str, spent_msat: int, delivered_tokens: int, reason: str = "") -> str:
+    """Trailer for a serving failure AFTER payment — emitted in-band so the client gets a clean,
+    typed end (with what was actually spent + delivered) instead of a silently truncated stream.
+    No further chunk is charged: the host stops issuing challenges at the point of failure."""
+    return ERROR_MARKER + json.dumps({"message": message, "spent_msat": spent_msat,
+                                      "delivered_tokens": delivered_tokens, "reason": reason})
 
 
 @dataclass
