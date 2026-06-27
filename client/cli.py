@@ -75,14 +75,21 @@ def _cmd_nwc_check() -> None:
     print(f"[client] NWC relay(s): {', '.join(d.get('relays') or []) or '(none parsed)'}")
     if d.get("ok"):
         methods = d.get("methods", [])
-        print(f"[client] get_info: OK — relay + wallet are responsive. supports: {', '.join(methods)}")
-        if "pay_invoice" not in methods:
-            print("[client]   ! wallet does NOT advertise pay_invoice — it can't pay over NWC.")
-        print("[client]   -> NIP-47 responses ARE coming back, so a pay failure is payment-specific:")
+        src = d.get("source", "")
+        print(f"[client] link: OK — relay + wallet responsive [{src}]")
+        if methods:
+            print(f"[client]   methods: {', '.join(methods)}")
+            if "pay_invoice" not in methods:
+                print("[client]   ! wallet does NOT advertise pay_invoice — it can't pay over NWC.")
+        if d.get("notifications"):
+            print(f"[client]   notifications: {', '.join(d['notifications'])}")
+        if d.get("note"):
+            print(f"[client]   note: {d['note']}")
+        print("[client]   -> NIP-47 is reaching the wallet, so a pay failure is payment-specific:")
         print("[client]      check the wallet's own history for the attempt (never tried = request not")
         print("[client]      reaching it; tried+failed = routing/amount issue on the wallet side).")
     else:
-        print(f"[client] get_info: NO RESPONSE — {d.get('detail')}")
+        print(f"[client] link: NO RESPONSE — {d.get('detail')}")
         print("[client]   -> nothing came back on the configured relay: it may be down/flaky, or the")
         print("[client]      wallet isn't connected to it. Try a connection string on a different relay.")
 

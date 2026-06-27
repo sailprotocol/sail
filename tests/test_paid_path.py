@@ -149,42 +149,62 @@ def test_nwc_pay_wallet_rejection_surfaced_verbatim():
         wallet.load_uri, core._run_async, core._nwc = orig_uri, orig_run, orig_nwc
 
 
-def test_nwc_check_ok_reports_methods():
-    """get_info round-trip succeeds -> relay+wallet responsive, methods listed (pay failure would
-    then be payment-specific)."""
-    from nostr_sdk import Method
+from contextlib import contextmanager  # noqa: E402
+
+
+@contextmanager
+def _nwc_check_env(info_event, run_async):
+    """Patch nwc_check's collaborators: the 13194 info-event fetch and the get_info round-trip."""
     from client import core
-    orig_run, orig_desc, orig_nwc = core._run_async, core.nwc_describe, core._nwc
+    saved = (core.nwc_describe, core._nwc_fetch_info_event, core._run_async, core._nwc)
     try:
         core._nwc = object()
         core.nwc_describe = lambda: {"connected": True, "wallet_pubkey": "ab" * 32,
                                      "relays": ["wss://relay.example"]}
-        core._run_async = lambda f: types.SimpleNamespace(
-            methods=[Method.PAY_INVOICE, Method.GET_INFO, Method.MAKE_INVOICE])
+        core._nwc_fetch_info_event = lambda relays, pk: info_event
+        core._run_async = run_async
+        yield core
+    finally:
+        core.nwc_describe, core._nwc_fetch_info_event, core._run_async, core._nwc = saved
+
+
+def test_nwc_check_info_event_path_lists_methods():
+    """Robust path: the plaintext kind-13194 info event gives methods without any typed deserialize."""
+    with _nwc_check_env({"found": True, "methods": ["pay_invoice", "get_info", "make_invoice"],
+                         "notifications": ["payment_received"]}, run_async=None) as core:
+        d = core.nwc_check()
+        assert d["ok"] is True and d["source"].startswith("info-event"), d
+        assert "pay_invoice" in d["methods"] and "payment_received" in d["notifications"], d
+
+
+def test_nwc_check_getinfo_fallback():
+    from nostr_sdk import Method
+    with _nwc_check_env({"found": False},
+                        run_async=lambda f: types.SimpleNamespace(
+                            methods=[Method.PAY_INVOICE, Method.GET_INFO])) as core:
+        d = core.nwc_check()
+        assert d["ok"] is True and d["source"] == "get_info", d
+        assert "pay_invoice" in d["methods"], d
+
+
+def test_nwc_check_deserialize_error_is_success_not_dead():
+    """THE BUG: a working wallet whose get_info has newer fields makes the SDK raise a deserialize/
+    'Unknown method' error. The wallet RESPONDED — it must be OK, never 'NO RESPONSE'."""
+    def _boom(f):
+        raise Exception("Can't deserialize response from wallet: error=Unknown method: sign_message")
+    with _nwc_check_env({"found": False}, run_async=_boom) as core:
         d = core.nwc_check()
         assert d["ok"] is True, d
-        assert "pay_invoice" in d["methods"] and "get_info" in d["methods"], d
-    finally:
-        core._run_async, core.nwc_describe, core._nwc = orig_run, orig_desc, orig_nwc
+        assert d["source"] == "get_info(unparsed)" and "note" in d, d
 
 
-def test_nwc_check_no_response_is_flagged():
-    """get_info times out / 'premature exit' -> nothing coming back on the relay (relay/wallet
-    side), reported as not-ok with the real detail."""
-    from client import core
-    orig_run, orig_desc, orig_nwc = core._run_async, core.nwc_describe, core._nwc
-    try:
-        core._nwc = object()
-        core.nwc_describe = lambda: {"connected": True, "wallet_pubkey": "ab" * 32,
-                                     "relays": ["wss://relay.example"]}
-
-        def _boom(f):
-            raise Exception("Generic: premature exit")
-        core._run_async = _boom
+def test_nwc_check_real_no_response_is_flagged():
+    """A genuine timeout / 'premature exit' (no event at all) IS a failure."""
+    def _boom(f):
+        raise Exception("Generic: premature exit")
+    with _nwc_check_env({"found": False}, run_async=_boom) as core:
         d = core.nwc_check()
         assert d["ok"] is False and "premature exit" in d["detail"], d
-    finally:
-        core._run_async, core.nwc_describe, core._nwc = orig_run, orig_desc, orig_nwc
 
 
 if __name__ == "__main__":

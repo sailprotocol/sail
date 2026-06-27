@@ -151,21 +151,75 @@ def _nwc_client():
     return _nwc
 
 
+def _nwc_fetch_info_event(relays: list, wallet_pubkey_hex: str | None) -> dict:
+    """Read the wallet's NIP-47 info event (kind 13194) straight off the relay — it's PLAINTEXT
+    (space-separated supported methods + a notifications tag), so it sidesteps the SDK's strict
+    typed get_info deserialize that chokes on newer methods/notifications. {found, methods, ...}."""
+    from datetime import timedelta
+    from nostr_sdk import Client, Filter, Kind, RelayUrl
+    if not relays or not wallet_pubkey_hex:
+        return {"found": False, "error": "no relay/pubkey"}
+
+    async def _go():
+        c = Client()
+        for r in relays:
+            await c.add_relay(RelayUrl.parse(r))
+        await c.connect()
+        try:
+            await c.wait_for_connection(timedelta(seconds=10))
+        except Exception:  # noqa: BLE001
+            pass
+        evs = await c.fetch_events(Filter().kind(Kind(13194)), timedelta(seconds=10))
+        out = evs.to_vec()
+        await c.shutdown()
+        return out
+
+    try:
+        evs = _run_async(_go)
+    except Exception as e:  # noqa: BLE001
+        return {"found": False, "error": f"{type(e).__name__}: {e}"}
+    # filter to our wallet in Python (robust regardless of relay-side author filtering)
+    ours = [e for e in evs if e.author().to_hex() == wallet_pubkey_hex]
+    if not ours:
+        return {"found": False}
+    ev = ours[0]
+    methods = sorted({m for m in ev.content().split() if m})
+    notifs = []
+    for t in ev.tags().to_vec():
+        v = t.as_vec()
+        if len(v) >= 2 and v[0] == "notifications":
+            notifs = v[1].split()
+    return {"found": True, "methods": methods, "notifications": notifs}
+
+
 def nwc_check() -> dict:
-    """Probe the NWC link WITHOUT paying: a get_info round-trip exercises the full NIP-47 path
-    (connect relay -> publish request -> wallet responds -> relay delivers back) minus the payment.
-    If it returns, the relay + wallet are responsive and a pay failure is payment-specific; if it
-    times out, nothing is coming back on the configured relay (try a different relay/connection)."""
+    """Probe the NWC link WITHOUT paying. PRIMARY: read the wallet's plaintext kind-13194 info
+    event off the relay (robust — no strict typed deserialize). FALLBACK: a get_info round-trip,
+    where a *deserialize* failure still means the wallet RESPONDED (the SDK just can't map newer
+    fields) and must NOT be reported as 'no response'. Only a real timeout/no-event is a failure."""
     import asyncio
     d = nwc_describe()
     if not d.get("connected"):
         return {**d, "ok": False, "detail": "no wallet connected (set NWC_URI or connect in the GUI)"}
+
+    info = _nwc_fetch_info_event(d.get("relays"), d.get("wallet_pubkey"))
+    if info.get("found"):
+        return {**d, "ok": True, "methods": info.get("methods", []),
+                "notifications": info.get("notifications", []), "source": "info-event(13194)"}
+
     try:
-        info = _run_async(lambda: asyncio.wait_for(_nwc_client().get_info(), NWC_PAY_TIMEOUT))
-        methods = sorted(str(m).split(".")[-1].lower() for m in info.methods)
-        return {**d, "ok": True, "methods": methods}
+        resp = _run_async(lambda: asyncio.wait_for(_nwc_client().get_info(), NWC_PAY_TIMEOUT))
+        methods = sorted(str(m).split(".")[-1].lower() for m in resp.methods)
+        return {**d, "ok": True, "methods": methods, "source": "get_info"}
     except Exception as e:  # noqa: BLE001
-        return {**d, "ok": False, "detail": f"{type(e).__name__}: {e}"}
+        detail = f"{type(e).__name__}: {e}"
+        low = detail.lower()
+        if any(s in low for s in ("deserialize", "unknown method", "unknown notification")):
+            # The wallet REPLIED; the SDK just couldn't strictly type newer fields. That's a SUCCESS,
+            # not a dead wallet — the false-negative this fixes.
+            return {**d, "ok": True, "methods": [], "source": "get_info(unparsed)",
+                    "note": f"wallet responded but the SDK couldn't fully parse it ({detail})"}
+        return {**d, "ok": False, "detail": detail}
 
 
 def nwc_pay(invoice: str) -> str:
