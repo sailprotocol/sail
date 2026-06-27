@@ -33,7 +33,16 @@ def _cmd_list() -> None:
         hidden.append(f"{d['pow_rejected']} by PoW")
     if d["allowlist_hidden"]:
         hidden.append(f"{d['allowlist_hidden']} by model allowlist")
+    if d["sig_rejected"]:
+        hidden.append(f"{d['sig_rejected']} by bad signature")
+    if d["parse_rejected"]:
+        hidden.append(f"{d['parse_rejected']} by parse error")
     print(f"[client] {len(d['hosts'])} shown" + (f" · hidden: {', '.join(hidden)}" if hidden else ""))
+    # Per-listing PoW detail: measured < required, with which host — so a hidden host is
+    # diagnosable (e.g. "published with 0 bits" = host isn't grinding PoW) instead of a guess.
+    for p in d["pow_hidden"]:
+        print(f"    - {alias_label(p['pubkey'])}  PoW {p['bits']}<{p['required']}"
+              + ("  (host published with no/low PoW — raise its POW_TARGET)" if p["bits"] < p["required"] // 2 else ""))
     if d["rep_hidden"]:
         print("[client] un-bury reputation-hidden hosts with: python -m client.cli --reset-reputation")
 

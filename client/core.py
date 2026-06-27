@@ -40,11 +40,15 @@ def discover_hosts_detailed() -> dict:
     """Like discover_hosts() but also reports what was filtered out, so `--list` can show it
     instead of a bare 'No hosts found'. Never touches a pay path."""
     raw = registry.discover()
-    pow_rejected = registry.discovery_stats().get("pow_rejected", 0)
+    stats = registry.discovery_stats()
     allowed = [h for h in raw if moderation.is_model_allowed(h.models[0].name)]
     kept, hidden = reputation.partition(allowed, reputation.load())
     return {"hosts": kept, "rep_hidden": len(hidden),
-            "allowlist_hidden": len(raw) - len(allowed), "pow_rejected": pow_rejected}
+            "allowlist_hidden": len(raw) - len(allowed),
+            "pow_rejected": stats.get("pow_rejected", 0),
+            "pow_hidden": stats.get("pow_hidden", []),       # [{pubkey, bits, required}]
+            "sig_rejected": stats.get("sig_rejected", 0),
+            "parse_rejected": stats.get("parse_rejected", 0)}
 
 
 def proxy_for(endpoint: str) -> str | None:

@@ -30,12 +30,23 @@ def _pow_min() -> int:
     return int(os.getenv("POW_MIN_DIFFICULTY", "8"))  # listings below this are rejected by clients
 
 
+def _empty_stats() -> dict:
+    """Per-discover() rejection accounting, so the client can show WHY a listing was filtered
+    (and not mislabel a signature/parse failure as 'PoW'). pow_hidden carries the measured vs
+    required difficulty per rejected listing for an accurate, diagnosable --list line."""
+    return {"pow_rejected": 0, "sig_rejected": 0, "parse_rejected": 0, "pow_hidden": []}
+
+
 class RegistryBackend:
     def publish(self, listing: HostListing) -> None:
         raise NotImplementedError
 
     def discover(self) -> list[HostListing]:
         raise NotImplementedError
+
+    def _note_pow_reject(self, pubkey: str, bits: int, required: int) -> None:
+        self._stats["pow_rejected"] += 1
+        self._stats["pow_hidden"].append({"pubkey": pubkey, "bits": bits, "required": required})
 
     def host_pubkey(self) -> str | None:
         """Stable host identity for this backend, or None to let the daemon pick its own."""
@@ -57,7 +68,7 @@ class LocalRegistry(RegistryBackend):
         (self.dir / f"{listing.pubkey}.json").write_text(json.dumps(event))
 
     def discover(self) -> list[HostListing]:
-        self._stats = {"pow_rejected": 0}
+        self._stats = _empty_stats()
         if not self.dir.exists():
             return []
         min_diff = _pow_min()
@@ -65,11 +76,17 @@ class LocalRegistry(RegistryBackend):
         for f in self.dir.glob("*.json"):
             try:
                 event = json.loads(f.read_text())
-                if min_diff > 0 and leading_zero_bits(nip01_id(event)) < min_diff:
-                    self._stats["pow_rejected"] += 1  # reject under-difficulty listings
-                    continue
+            except Exception:
+                self._stats["parse_rejected"] += 1
+                continue
+            bits = leading_zero_bits(nip01_id(event))
+            if min_diff > 0 and bits < min_diff:  # reject under-difficulty listings
+                self._note_pow_reject(event.get("pubkey", "?"), bits, min_diff)
+                continue
+            try:
                 out.append(HostListing.from_nostr_event(event))
             except Exception:
+                self._stats["parse_rejected"] += 1
                 continue
         return out
 
@@ -157,16 +174,18 @@ class NostrRegistry(RegistryBackend):
             return out
 
         min_diff = _pow_min()
-        self._stats = {"pow_rejected": 0}
+        self._stats = _empty_stats()
         by_pubkey: dict[str, HostListing] = {}
         for ev in _run(_go):
             if not ev.verify():  # schnorr signature + event id check
+                self._stats["sig_rejected"] += 1
                 continue
             tags = [t.as_vec() for t in ev.tags().to_vec()]
             if not any(len(t) >= 2 and t[0] == "n" and t[1] == NOSTR_TAG_VALUE for t in tags):
-                continue
-            if min_diff > 0 and leading_zero_bits(ev.id().to_hex()) < min_diff:
-                self._stats["pow_rejected"] += 1  # below the client's minimum PoW difficulty
+                continue  # not one of ours — silently ignored, not a rejection
+            bits = leading_zero_bits(ev.id().to_hex())
+            if min_diff > 0 and bits < min_diff:
+                self._note_pow_reject(ev.author().to_hex(), bits, min_diff)
                 continue
             try:
                 listing = HostListing.from_nostr_event(
@@ -177,6 +196,7 @@ class NostrRegistry(RegistryBackend):
                     }
                 )
             except Exception:
+                self._stats["parse_rejected"] += 1
                 continue
             prev = by_pubkey.get(listing.pubkey)
             if prev is None or listing.updated_at >= prev.updated_at:  # latest wins
