@@ -418,11 +418,29 @@ def dashboard(request: Request):
     return FileResponse(_STATIC / "dashboard.html")
 
 
+_PAY_HEALTH_TTL = 30  # seconds; payment-API pings are cached so /api/status polling stays cheap
+_pay_health = {"ts": 0.0, "ok": None, "detail": ""}
+
+
+def _payments_ready() -> tuple[bool, str]:
+    """Is the payment backend's API actually responding? (cached). Used to refuse to declare a host
+    'live'/payable when its node or wallet can't issue invoices."""
+    now = time.time()
+    if _pay_health["ok"] is None or now - _pay_health["ts"] > _PAY_HEALTH_TTL:
+        try:
+            ok, detail = _ln.ping()
+        except Exception as e:  # noqa: BLE001
+            ok, detail = False, str(e)[:120]
+        _pay_health.update(ts=now, ok=bool(ok), detail=detail)
+    return _pay_health["ok"], _pay_health["detail"]
+
+
 @app.get("/api/status")
 def api_status(request: Request):
     if not _is_local(request):
         return JSONResponse({"error": "not found"}, status_code=404)
     t = _today()
+    pay_ok, pay_detail = _payments_ready()
     # in-progress metered generations (started, not yet done) shown as "streaming"
     streaming = [{"tag": sid[:4], "model": _model.name, "tokens": v["emitted"],
                   "msat": v["charged_msat"], "state": "streaming"}
@@ -436,6 +454,8 @@ def api_status(request: Request):
         "transport": TRANSPORT,
         "model": _model.name,
         "payments": os.getenv("PAYMENTS", "mock").lower(),
+        "payments_ready": pay_ok,        # payment backend API is responding (host is payable)
+        "payments_detail": pay_detail,
         "price_msat_per_token": PRICE_MSAT_PER_TOKEN,
         "chunk_tokens": CHUNK_TOKENS,
         "invoice_expiry_s": BOLT11_EXPIRY_SECONDS,
@@ -637,17 +657,43 @@ def _tor_reachable() -> bool:
 
 @app.post("/api/setup/golive")
 def setup_golive(request: Request):
-    """Final step: pick the transport (Tor when its control port is reachable, else a deliberate
-    clearnet fallback), write it, then restart sail-host so it loads the new config, creates the
-    onion, and publishes. Restart may kill this process — the wizard polls /api/status until live."""
+    """Final step. Pick the transport (Tor when reachable, else a deliberate clearnet fallback),
+    INSTALL + enable the sail-host systemd unit (so a host that looks live survives reboot — it was
+    never installed before), verify the phoenixd payment service is up when that's the rail, then
+    restart sail-host to apply. The wizard then polls /api/status and only shows 'live' once the
+    daemon AND the payment API both respond. Anything needing root that we can't do passwordless is
+    surfaced as exact commands."""
     if not _is_local(request):
         return _NOT_FOUND
-    from host import config_writer
+    from host import config_writer, service_setup
+
     transport_mode = "tor" if _tor_reachable() else "clearnet"
-    config_writer.update_env_file({"TRANSPORT": transport_mode})  # was silently defaulting to clearnet
-    result = config_writer.restart_service()
-    result["transport"] = transport_mode
-    return result
+    config_writer.update_env_file({"TRANSPORT": transport_mode})
+
+    # Durability: install + enable the sail-host unit from the shipped template (was missing).
+    sail_host = service_setup.install_sail_host_service()
+
+    # Payment service must actually be running before we let the host be advertised as payable.
+    tier = os.getenv("PAYMENTS", "mock").lower()
+    payments = {"tier": tier}
+    if tier == "phoenixd":
+        from host import phoenixd_setup
+        # phoenixd.service is installed during the payout step; make sure it's started, then ping it.
+        payments["service"] = config_writer.service_command("start", service="phoenixd")
+        ok, detail = _ln.ping()
+        payments.update(ready=ok, detail=detail)
+
+    restart = config_writer.restart_service()  # apply config / (re)start the host service
+
+    commands = []
+    if sail_host.get("install_required"):
+        commands += sail_host.get("commands", [])
+    if restart.get("restart_required"):
+        commands.append(restart["command"])
+    if tier == "phoenixd" and payments.get("service", {}).get("ok") is False:
+        commands.append(payments["service"]["command"])
+    return {"transport": transport_mode, "sail_host": sail_host, "payments": payments,
+            "restart": restart, "commands": commands}
 
 
 # --- host controls (LOCAL ONLY) ---------------------------------------------

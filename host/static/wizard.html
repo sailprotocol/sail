@@ -203,6 +203,7 @@
         <div class="alias" id="alias">—</div>
         <div class="row"><span style="color:var(--muted)">Onion</span><span class="mono" id="l-onion">—</span></div>
         <div class="row"><span style="color:var(--muted)">Pubkey</span><span class="mono" id="l-pub">—</span></div>
+        <div class="row"><span style="color:var(--muted)">Payments</span><span id="l-pay"><span class="pill q">checking…</span></span></div>
         <div class="row"><span style="color:var(--muted)">Self-test</span><span id="l-test"><span class="pill q">checking…</span></span></div>
         <div class="row"><span style="color:var(--muted)">Listing</span><span><span class="pill good">published on launch</span></span></div>
       </div>
@@ -426,24 +427,35 @@ async function goLive(){
   $('presummary').style.display='none'; $('livebusy').style.display='block';
   nextBtn.disabled=true; nextBtn.textContent='Going live…'; backBtn.style.visibility='hidden';
   let res=null; try{ res=await api('/api/setup/golive',{method:'POST'}); }catch{ /* restart may drop the connection */ }
-  if(res && res.restart_required){
+  // Surface anything that needs root we couldn't do passwordless (install the unit, restart, etc.).
+  const cmds=(res&&res.commands)||(res&&res.restart_required?[res.command]:[]);
+  if(cmds.length){
     $('manualrestart').style.display='block';
-    $('manualrestart').innerHTML=`Almost there — run this to start your host, then this page will finish automatically:<br><span class="mono">${res.command}</span>`;
+    $('manualrestart').innerHTML='Almost there — run these to install &amp; start your host as a service, then this page finishes automatically:<br>'
+      + cmds.map(c=>`<span class="mono">${c}</span>`).join('<br>');
   }
   pollLive();
 }
 async function pollLive(){
+  // Only declare live when the daemon responds AND the payment API is ready (host is payable).
   for(let i=0;i<150;i++){           // ~5 min budget
     await new Promise(r=>setTimeout(r,2000));
     let st=null; try{ st=await api('/api/status'); }catch{ continue; }
-    if(st && !st.error && st.state==='live'){ return liveDone(st); }
+    if(st && !st.error && st.state==='live' && st.payments_ready){ return liveDone(st); }
+    if(st && !st.error && st.state==='live'){ $('busyt').textContent='Daemon up — waiting on the payment backend…'; $('busyd').textContent=st.payments_detail||''; }
   }
+  // daemon up but payments never came ready: don't claim "live" — say what's wrong
+  let st=null; try{ st=await api('/api/status'); }catch{}
+  if(st && !st.error){ liveDone(st); }
 }
 async function liveDone(st){
   $('livebusy').style.display='none'; $('manualrestart').style.display='none'; $('livedone').style.display='block';
-  $('liveh').textContent='Your host is live';
+  const payable = !!st.payments_ready;
+  $('liveh').textContent = payable ? 'Your host is live' : 'Host running — but not payable yet';
   const pub=st.pubkey||''; $('alias').textContent = st.alias_label || ('host · '+pub.slice(0,4));
   $('l-onion').textContent=st.onion; $('l-pub').textContent=pub.slice(0,8)+'…'+pub.slice(-6);
+  $('l-pay').innerHTML = payable ? `<span class="pill good">● ${st.payments} ready</span>`
+    : `<span class="pill bad">● ${st.payments_detail||'not responding'}</span>`;
   try{ const t=await api('/api/selftest'); $('l-test').innerHTML = t.ok? '<span class="pill good">● 402 passing</span>' : '<span class="pill bad">● failed</span>'; }
   catch{ $('l-test').innerHTML='<span class="pill q">unavailable</span>'; }
   nextBtn.disabled=false; nextBtn.textContent='Open dashboard'; nextBtn.onclick=()=>{ window.location='/'; };

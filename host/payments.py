@@ -46,6 +46,11 @@ class LightningBackend:
         pays and the host confirms settlement against its own node (not via a revealed preimage)."""
         raise NotImplementedError
 
+    def ping(self) -> tuple[bool, str]:
+        """Is the payment backend's API reachable? Used by go-live / status to refuse to declare a
+        host 'live' (payable) when its node/wallet can't actually issue invoices. Default: ok."""
+        return True, "ok"
+
 
 class MockLightning(LightningBackend):
     """No real node. Generates a real preimage/hash pair and 'settles' on demand."""
@@ -115,6 +120,13 @@ class LndLightning(LightningBackend):
             return False
         return r.json().get("state") == "SETTLED"
 
+    def ping(self) -> tuple[bool, str]:
+        try:
+            r = self._client.get("/v1/getinfo")
+        except httpx.HTTPError as e:
+            return False, f"LND unreachable: {str(e)[:80]}"
+        return (r.status_code == 200, "LND ok" if r.status_code == 200 else f"LND HTTP {r.status_code}")
+
 
 class PhoenixdLightning(LightningBackend):
     """phoenixd — self-custodial node with auto-liquidity, over its local HTTP API.
@@ -152,6 +164,14 @@ class PhoenixdLightning(LightningBackend):
         if r.status_code != 200:
             return False  # unknown hash or error -> unpaid
         return bool(r.json().get("isPaid"))
+
+    def ping(self) -> tuple[bool, str]:
+        try:
+            r = self._client.get("/getinfo")
+        except httpx.HTTPError as e:
+            return False, f"phoenixd unreachable: {str(e)[:80]}"
+        return (r.status_code == 200, "phoenixd ok" if r.status_code == 200
+                else f"phoenixd HTTP {r.status_code}")
 
 
 def _nwc_run(coro_factory):
@@ -220,6 +240,14 @@ class NwcLightning(LightningBackend):
         except Exception:  # noqa: BLE001 — unknown hash / unreachable -> treat as unpaid
             return False
         return resp.state == TransactionState.SETTLED or resp.settled_at is not None
+
+    def ping(self) -> tuple[bool, str]:
+        from nostr_sdk import Method
+        try:
+            info = _nwc_run(self._nwc.get_info)
+        except Exception as e:  # noqa: BLE001
+            return False, f"NWC wallet unreachable: {str(e)[:80]}"
+        return (Method.MAKE_INVOICE in info.methods, "NWC ok")
 
 
 def get_backend() -> LightningBackend:

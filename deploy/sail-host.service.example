@@ -1,0 +1,32 @@
+# SAIL host systemd unit — TEMPLATE.
+#
+# The setup wizard's "go live" renders this (filling the placeholders below from the running
+# environment), writes deploy/sail-host.service, and installs + enables it. You can also do it by
+# hand: substitute the placeholders, then
+#   sudo cp deploy/sail-host.service /etc/systemd/system/sail-host.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now sail-host
+#
+# Placeholders: {{USER}} {{WORKDIR}} {{UVICORN}} {{ENV_FILE}} {{PORT}}
+
+[Unit]
+Description=SAIL inference host (L402 + Tor onion)
+After=network-online.target tor.service ollama.service
+Wants=network-online.target tor.service
+# NOTE: StartLimitIntervalSec belongs in [Unit] (systemd warns if it's under [Service]).
+# 0 = keep retrying through boot races (tor/ollama/LND not up yet) instead of hitting the limiter.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User={{USER}}
+# Read Tor's control-auth cookie so the daemon can (re)create the onion (TRANSPORT=tor).
+SupplementaryGroups=debian-tor
+WorkingDirectory={{WORKDIR}}
+Environment=ENV_FILE={{ENV_FILE}}
+Environment=PYTHONPATH={{WORKDIR}}
+ExecStart={{UVICORN}} host.daemon:app --port {{PORT}}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

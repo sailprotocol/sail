@@ -28,3 +28,4 @@ desktop/src-tauri/icons/
 desktop/icon-src.png
 deploy/*
 !deploy/sail-sudoers.example
+!deploy/sail-host.service.example
