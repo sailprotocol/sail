@@ -112,35 +112,77 @@ def _nwc_failure_hint(detail: str) -> str:
     NO usable NIP-47 response came back (vs the wallet replying with a real rejection code)."""
     d = detail.lower()
     if "premature" in d or "timeout" in d or "timed out" in d or "generic" in d:
-        return (f"no usable response from the wallet ({detail}). Either the relay is flaky, or the "
-                "wallet couldn't route this payment — a very common cause is the host's phoenixd "
-                "having no inbound channel yet, so it can't receive small (or any) payments until "
-                "one is bootstrapped (~25-35k sat). Try a larger amount / the BOLT11 option, or wait "
-                "for the host to open a channel.")
+        return (f"no NIP-47 response came back ({detail}) — the wallet/relay didn't reply. Run "
+                "`python -m client.cli --nwc-check` to test the link (is the relay reachable? does "
+                "the wallet answer get_info?). Likely causes: a flaky/wrong NWC relay, the wallet "
+                "not connected to it, or the wallet not actually attempting the payment — check the "
+                "wallet's own history for this attempt. (Far rarer: a host whose phoenixd has no "
+                "channel yet.)")
     return f"the wallet rejected it: {detail}"  # carries the NIP-47 code/message verbatim
+
+
+def nwc_describe() -> dict:
+    """Best-effort: the wallet pubkey + relay(s) the NWC connection uses, for diagnostics. Never
+    raises (parse failures just yield {connected: ...})."""
+    uri = wallet.load_uri()
+    if not uri:
+        return {"connected": False}
+    try:
+        from nostr_sdk import NostrWalletConnectUri
+        p = NostrWalletConnectUri.parse(uri)
+        return {"connected": True, "wallet_pubkey": p.public_key().to_hex(),
+                "relays": [str(r) for r in p.relays()]}
+    except Exception as e:  # noqa: BLE001
+        return {"connected": True, "wallet_pubkey": None, "relays": [], "parse_error": str(e)[:120]}
+
+
+def _nwc_client():
+    """The cached Nwc client (built with a generous response window so a slow wallet reply isn't
+    cut off as a 'premature exit')."""
+    global _nwc
+    if _nwc is None:
+        from datetime import timedelta
+        from nostr_sdk import Nwc, NostrWalletConnectUri, NostrWalletConnectOptions
+        uri = wallet.load_uri()
+        if not uri:
+            raise RuntimeError("no wallet connected — connect one in the GUI or set NWC_URI")
+        opts = NostrWalletConnectOptions().timeout(timedelta(seconds=NWC_PAY_TIMEOUT))
+        _nwc = Nwc.with_opts(NostrWalletConnectUri.parse(uri), opts)
+    return _nwc
+
+
+def nwc_check() -> dict:
+    """Probe the NWC link WITHOUT paying: a get_info round-trip exercises the full NIP-47 path
+    (connect relay -> publish request -> wallet responds -> relay delivers back) minus the payment.
+    If it returns, the relay + wallet are responsive and a pay failure is payment-specific; if it
+    times out, nothing is coming back on the configured relay (try a different relay/connection)."""
+    import asyncio
+    d = nwc_describe()
+    if not d.get("connected"):
+        return {**d, "ok": False, "detail": "no wallet connected (set NWC_URI or connect in the GUI)"}
+    try:
+        info = _run_async(lambda: asyncio.wait_for(_nwc_client().get_info(), NWC_PAY_TIMEOUT))
+        methods = sorted(str(m).split(".")[-1].lower() for m in info.methods)
+        return {**d, "ok": True, "methods": methods}
+    except Exception as e:  # noqa: BLE001
+        return {**d, "ok": False, "detail": f"{type(e).__name__}: {e}"}
 
 
 def nwc_pay(invoice: str) -> str:
     """Pay a BOLT11 invoice from the user's OWN wallet over NWC (NIP-47) -> preimage hex.
     Non-custodial: this only relays a pay_invoice request to the user's wallet."""
-    global _nwc
-    uri = wallet.load_uri()
-    if not uri:
-        raise RuntimeError("no wallet connected — connect one in the GUI or set NWC_URI")
     import asyncio
-    from datetime import timedelta
-    from nostr_sdk import (Nwc, NostrWalletConnectUri, NostrWalletConnectOptions, PayInvoiceRequest)
-    if _nwc is None:
-        # Give the wallet a generous response window: too short and nostr-sdk bails with a "premature
-        # exit" BEFORE the wallet's real NIP-47 error (no_route / payment_failed) gets back to us.
-        opts = NostrWalletConnectOptions().timeout(timedelta(seconds=NWC_PAY_TIMEOUT))
-        _nwc = Nwc.with_opts(NostrWalletConnectUri.parse(uri), opts)
+    from nostr_sdk import PayInvoiceRequest
+    nwc = _nwc_client()
+    desc = nwc_describe()  # log the request we're about to send, so a stall is attributable
+    _clog(f"NWC pay request -> wallet={(desc.get('wallet_pubkey') or '?')[:8]} "
+          f"relays={desc.get('relays')} invoice={invoice[:20]}…")
 
     async def _go():
         # Hard cap (slightly over the NWC timeout): a hung payment used to make the client never
         # re-request, so the host only saw the 402 and the operator saw a silent stall.
         return await asyncio.wait_for(
-            _nwc.pay_invoice(PayInvoiceRequest(id=None, invoice=invoice, amount=None)),
+            nwc.pay_invoice(PayInvoiceRequest(id=None, invoice=invoice, amount=None)),
             NWC_PAY_TIMEOUT + 10)
 
     try:

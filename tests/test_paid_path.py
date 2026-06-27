@@ -123,8 +123,8 @@ def test_nwc_pay_premature_exit_gets_actionable_hint():
             assert False
         except RuntimeError as e:
             m = str(e)
-            assert "premature exit" in m, m          # the REAL error is preserved
-            assert "phoenixd" in m and "channel" in m, m  # plus the actionable cause
+            assert "premature exit" in m, m            # the REAL error is preserved
+            assert "--nwc-check" in m, m               # plus the actionable next step to diagnose
     finally:
         wallet.load_uri, core._run_async, core._nwc = orig_uri, orig_run, orig_nwc
 
@@ -147,6 +147,44 @@ def test_nwc_pay_wallet_rejection_surfaced_verbatim():
             assert "PAYMENT_FAILED: no_route to destination" in str(e), str(e)
     finally:
         wallet.load_uri, core._run_async, core._nwc = orig_uri, orig_run, orig_nwc
+
+
+def test_nwc_check_ok_reports_methods():
+    """get_info round-trip succeeds -> relay+wallet responsive, methods listed (pay failure would
+    then be payment-specific)."""
+    from nostr_sdk import Method
+    from client import core
+    orig_run, orig_desc, orig_nwc = core._run_async, core.nwc_describe, core._nwc
+    try:
+        core._nwc = object()
+        core.nwc_describe = lambda: {"connected": True, "wallet_pubkey": "ab" * 32,
+                                     "relays": ["wss://relay.example"]}
+        core._run_async = lambda f: types.SimpleNamespace(
+            methods=[Method.PAY_INVOICE, Method.GET_INFO, Method.MAKE_INVOICE])
+        d = core.nwc_check()
+        assert d["ok"] is True, d
+        assert "pay_invoice" in d["methods"] and "get_info" in d["methods"], d
+    finally:
+        core._run_async, core.nwc_describe, core._nwc = orig_run, orig_desc, orig_nwc
+
+
+def test_nwc_check_no_response_is_flagged():
+    """get_info times out / 'premature exit' -> nothing coming back on the relay (relay/wallet
+    side), reported as not-ok with the real detail."""
+    from client import core
+    orig_run, orig_desc, orig_nwc = core._run_async, core.nwc_describe, core._nwc
+    try:
+        core._nwc = object()
+        core.nwc_describe = lambda: {"connected": True, "wallet_pubkey": "ab" * 32,
+                                     "relays": ["wss://relay.example"]}
+
+        def _boom(f):
+            raise Exception("Generic: premature exit")
+        core._run_async = _boom
+        d = core.nwc_check()
+        assert d["ok"] is False and "premature exit" in d["detail"], d
+    finally:
+        core._run_async, core.nwc_describe, core._nwc = orig_run, orig_desc, orig_nwc
 
 
 if __name__ == "__main__":

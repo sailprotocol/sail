@@ -9,6 +9,7 @@ the best one, and streams the response while tallying sats. All the real logic l
     python -m client.cli --list                # show discoverable hosts + what's filtered
     python -m client.cli --reputation          # inspect the local reputation store
     python -m client.cli --reset-reputation    # clear it (un-bury hosts dropped by past errors)
+    python -m client.cli --nwc-check           # probe the NWC wallet link (no payment)
 """
 from __future__ import annotations
 
@@ -63,11 +64,36 @@ def _cmd_reset_reputation() -> None:
           else "[client] no local reputation store to clear.")
 
 
+def _cmd_nwc_check() -> None:
+    """Diagnose the NWC link without paying — does a NIP-47 get_info round-trip on the wallet's
+    relay, so a pay failure can be attributed (relay/wallet vs payment-specific)."""
+    d = core.nwc_check()
+    if not d.get("connected"):
+        print("[client] " + d.get("detail", "no wallet connected"))
+        return
+    print(f"[client] NWC wallet: {d.get('wallet_pubkey')}")
+    print(f"[client] NWC relay(s): {', '.join(d.get('relays') or []) or '(none parsed)'}")
+    if d.get("ok"):
+        methods = d.get("methods", [])
+        print(f"[client] get_info: OK — relay + wallet are responsive. supports: {', '.join(methods)}")
+        if "pay_invoice" not in methods:
+            print("[client]   ! wallet does NOT advertise pay_invoice — it can't pay over NWC.")
+        print("[client]   -> NIP-47 responses ARE coming back, so a pay failure is payment-specific:")
+        print("[client]      check the wallet's own history for the attempt (never tried = request not")
+        print("[client]      reaching it; tried+failed = routing/amount issue on the wallet side).")
+    else:
+        print(f"[client] get_info: NO RESPONSE — {d.get('detail')}")
+        print("[client]   -> nothing came back on the configured relay: it may be down/flaky, or the")
+        print("[client]      wallet isn't connected to it. Try a connection string on a different relay.")
+
+
 def main() -> None:
     load_env()
     argv = sys.argv[1:]
     if argv and argv[0] == "--list":
         return _cmd_list()
+    if argv and argv[0] == "--nwc-check":
+        return _cmd_nwc_check()
     if argv and argv[0] == "--reputation":
         return _cmd_reputation()
     if argv and argv[0] == "--reset-reputation":
