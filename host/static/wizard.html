@@ -38,10 +38,10 @@
   .opt .dot{position:absolute; left:16px; top:16px; width:16px; height:16px; border-radius:50%; border:2px solid var(--line);}
   .opt.sel{border-color:var(--beacon); background:#13192180;} .opt.sel .dot{border-color:var(--beacon); background:var(--beacon); box-shadow:0 0 9px var(--beacon);}
   .opt.disabled{opacity:.5; cursor:not-allowed;} .opt.disabled:hover{border-color:var(--line);}
-  .opt .name{font-weight:600;} .opt .meta{font-size:0.85rem; color:var(--muted); margin-top:2px;}
-  .opt .pill{position:absolute; right:16px; top:15px;}
-  /* narrow phones: let the top-right pill flow under the name instead of overlapping it */
-  @media (max-width:380px){ .opt .pill{position:static; display:inline-block; margin-top:8px;} }
+  .opt .name{font-weight:600;} .opt .meta{display:block; font-size:0.85rem; color:var(--muted); margin-top:2px;}
+  /* name + pill share a flex row so the pill never overlaps the text at any width */
+  .opt-head{display:flex; align-items:baseline; gap:10px;}
+  .opt-head .name{flex:1; min-width:0;} .opt-head .pill{flex:none;}
 
   /* pricing estimate + model pull */
   .est{background:var(--ink-2); border:1px solid var(--line); border-radius:10px; padding:12px 15px; font-size:0.88rem; color:var(--muted);}
@@ -135,11 +135,21 @@
     <span class="eyebrow">Step 4 · Payout</span>
     <h1>How do you get paid?</h1>
     <p class="sub">Only your payout rail's sovereignty changes — discovery + reachability stay sovereign regardless.</p>
-    <label class="opt sel" data-pay="phoenixd"><input type="radio" name="pay" checked><span class="dot"></span><span class="name">phoenixd <span class="mono" style="color:var(--beacon-2);font-weight:400">— self-custodial</span></span><span class="meta">We run a node for you. You hold the keys; no channels to manage.</span><span class="pill">Recommended</span>
+    <label class="opt sel" data-pay="phoenixd"><input type="radio" name="pay" checked><span class="dot"></span>
+      <span class="opt-head"><span class="name">phoenixd <span class="mono" style="color:var(--beacon-2);font-weight:400">— self-custodial</span></span><span class="pill">Recommended</span></span>
+      <span class="meta">We run a node for you. You hold the keys; no channels to manage.</span>
       <div class="meters"><span class="meter"><span class="lbl">Ease</span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span><span class="seg"></span></span><span class="meter sov"><span class="lbl">Sov</span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span><span class="seg"></span></span></div>
     </label>
-    <label class="opt" data-pay="lnd"><input type="radio" name="pay"><span class="dot"></span><span class="name">Your own node <span class="mono" style="color:var(--beacon-2);font-weight:400">— LND</span></span><span class="meta">Connect a node you run. Most sovereign; most setup.</span><span class="pill q">Most sovereign</span></label>
-    <label class="opt" data-pay="nwc"><input type="radio" name="pay"><span class="dot"></span><span class="name">Connect a wallet <span class="mono" style="color:var(--beacon-2);font-weight:400">— NWC</span></span><span class="meta">As sovereign as the wallet — a custodial one can freeze or deanonymize you.</span><span class="pill q">Bring your own</span></label>
+    <label class="opt" data-pay="lnd"><input type="radio" name="pay"><span class="dot"></span>
+      <span class="opt-head"><span class="name">Your own node <span class="mono" style="color:var(--beacon-2);font-weight:400">— LND</span></span><span class="pill q">Most sovereign</span></span>
+      <span class="meta">Connect a node you run. Most sovereign; most setup.</span>
+      <div class="meters"><span class="meter"><span class="lbl">Ease</span><span class="seg on"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span></span><span class="meter sov"><span class="lbl">Sov</span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span></span></div>
+    </label>
+    <label class="opt" data-pay="nwc"><input type="radio" name="pay"><span class="dot"></span>
+      <span class="opt-head"><span class="name">Connect a wallet <span class="mono" style="color:var(--beacon-2);font-weight:400">— NWC</span></span><span class="pill q">Bring your own</span></span>
+      <span class="meta">As sovereign as the wallet — a custodial one can freeze or deanonymize you.</span>
+      <div class="meters"><span class="meter"><span class="lbl">Ease</span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span><span class="seg on"></span></span><span class="meter sov"><span class="lbl">Sov</span><span class="seg on"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span></span></div>
+    </label>
 
     <!-- per-tier config, revealed for the selected rail -->
     <div class="paycfg" id="cfg-lnd" style="display:none">
@@ -166,8 +176,9 @@
       <div class="phrase blurred" id="ph"></div>
       <div class="cover" id="seedcover"><span class="meta" style="color:var(--muted);font-size:0.85rem">Make sure no one can see your screen</span><button class="btn primary" id="revealBtn">Reveal phrase</button></div>
     </div>
+    <button class="btn primary" id="toVerify" style="display:none; margin-top:6px;">I've written them down — verify</button>
     <div class="verify" id="verify">
-      <p class="sub" style="margin:0 0 12px; font-size:0.88rem;">Confirm you wrote it down — type these two words. This is the last time the full phrase is shown.</p>
+      <p class="sub" style="margin:0 0 12px; font-size:0.88rem;">The words are now hidden — type these two from your written backup. (Reveal again above if needed.)</p>
       <div class="vrow">
         <div class="vfield"><label id="lbl-a">Word #?</label><input id="v-a" autocomplete="off" spellcheck="false"></div>
         <div class="vfield"><label id="lbl-b">Word #?</label><input id="v-b" autocomplete="off" spellcheck="false"></div>
@@ -285,11 +296,11 @@ function renderModels(models){
   models.forEach((m,i)=>{
     const el=document.createElement('label'); el.className='opt'+(i===0?' sel':'');
     el.dataset.model=m.name;
-    el.innerHTML=`<input type="radio" name="model" ${i===0?'checked':''}><span class="dot"></span><span class="name mono">${m.name}</span><span class="meta">${fmtSize(m.size)}</span><span class="pill good">ready</span>`;
+    el.innerHTML=`<input type="radio" name="model" ${i===0?'checked':''}><span class="dot"></span><span class="opt-head"><span class="name mono">${m.name}</span><span class="pill good">ready</span></span><span class="meta">${fmtSize(m.size)}</span>`;
     box.appendChild(el);
   });
   const pull=document.createElement('label'); pull.className='opt'+(models.length?'':' sel'); pull.dataset.model='__pull__';
-  pull.innerHTML=`<input type="radio" name="model" ${models.length?'':'checked'}><span class="dot"></span><span class="name">Pull a different model…</span><span class="meta">download from the Ollama library</span>`;
+  pull.innerHTML=`<input type="radio" name="model" ${models.length?'':'checked'}><span class="dot"></span><span class="opt-head"><span class="name">Pull a different model…</span></span><span class="meta">download from the Ollama library</span>`;
   box.appendChild(pull);
   box.querySelectorAll('input[name="model"]').forEach(r=>r.addEventListener('change',onModelPick));
   onModelPick();
@@ -381,8 +392,14 @@ function fillSeed(words){
   let a=Math.floor(Math.random()*words.length), b; do{ b=Math.floor(Math.random()*words.length); }while(b===a);
   vpos=[a,b]; $('lbl-a').textContent='Word #'+(a+1); $('lbl-b').textContent='Word #'+(b+1);
   $('v-a').value=''; $('v-b').value=''; seedVerified=false;
+  // fresh state: words hidden behind the cover, verify locked until they've written them down
+  $('ph').classList.add('blurred'); $('seedcover').style.display=''; $('toVerify').style.display='none';
+  $('verify').classList.remove('active');
 }
-$('revealBtn').onclick=()=>{ $('ph').classList.remove('blurred'); $('seedcover').style.display='none'; $('verify').classList.add('active'); $('v-a').focus(); };
+// Reveal shows the words but does NOT unlock verify; the operator must click "written them down",
+// which HIDES the words again before verifying — so confirming actually requires the paper backup.
+$('revealBtn').onclick=()=>{ $('ph').classList.remove('blurred'); $('seedcover').style.display='none'; $('toVerify').style.display='inline-block'; };
+$('toVerify').onclick=()=>{ $('ph').classList.add('blurred'); $('seedcover').style.display=''; $('toVerify').style.display='none'; $('verify').classList.add('active'); $('v-a').focus(); };
 function checkSeed(){
   let pass=true;
   [['v-a',vpos[0]],['v-b',vpos[1]]].forEach(([id,pos])=>{

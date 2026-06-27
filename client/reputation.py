@@ -78,10 +78,12 @@ def _is_bad(s: dict | None) -> bool:
     return s["attempts"] >= REP_MIN_ATTEMPTS and _success_rate(s) < REP_FAIL_RATE
 
 
-def rank(hosts, rep: dict):
-    """Discovered hosts best-first by the client's own experience; repeated failers dropped.
-    Unknown hosts get a neutral score so they're still tried, but below proven-good ones."""
+def partition(hosts, rep: dict):
+    """Split discovered hosts into (kept_best_first, hidden). Kept are ranked by the client's own
+    experience; hidden are repeated-failers dropped from candidates. Unknown hosts get a neutral
+    score so they're still tried, but below proven-good ones."""
     kept = [h for h in hosts if not _is_bad(rep.get(h.pubkey))]
+    hidden = [h for h in hosts if _is_bad(rep.get(h.pubkey))]
 
     def key(h):
         s = rep.get(h.pubkey)
@@ -89,4 +91,18 @@ def rank(hosts, rep: dict):
             return (0.5, 0.0)               # unknown: neutral, tried but below proven-good
         return (_success_rate(s), -(s.get("ewma_latency_ms") or 0.0))  # rate then low latency
 
-    return sorted(kept, key=key, reverse=True)
+    return sorted(kept, key=key, reverse=True), hidden
+
+
+def rank(hosts, rep: dict):
+    """Discovered hosts best-first by local experience; repeated failers dropped."""
+    return partition(hosts, rep)[0]
+
+
+def reset() -> bool:
+    """Wipe the local reputation store. Returns True if a file was removed."""
+    p = _path()
+    if p.exists():
+        p.unlink()
+        return True
+    return False

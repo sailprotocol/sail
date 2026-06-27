@@ -57,6 +57,7 @@ class LocalRegistry(RegistryBackend):
         (self.dir / f"{listing.pubkey}.json").write_text(json.dumps(event))
 
     def discover(self) -> list[HostListing]:
+        self._stats = {"pow_rejected": 0}
         if not self.dir.exists():
             return []
         min_diff = _pow_min()
@@ -65,7 +66,8 @@ class LocalRegistry(RegistryBackend):
             try:
                 event = json.loads(f.read_text())
                 if min_diff > 0 and leading_zero_bits(nip01_id(event)) < min_diff:
-                    continue  # reject under-difficulty listings
+                    self._stats["pow_rejected"] += 1  # reject under-difficulty listings
+                    continue
                 out.append(HostListing.from_nostr_event(event))
             except Exception:
                 continue
@@ -155,6 +157,7 @@ class NostrRegistry(RegistryBackend):
             return out
 
         min_diff = _pow_min()
+        self._stats = {"pow_rejected": 0}
         by_pubkey: dict[str, HostListing] = {}
         for ev in _run(_go):
             if not ev.verify():  # schnorr signature + event id check
@@ -163,7 +166,8 @@ class NostrRegistry(RegistryBackend):
             if not any(len(t) >= 2 and t[0] == "n" and t[1] == NOSTR_TAG_VALUE for t in tags):
                 continue
             if min_diff > 0 and leading_zero_bits(ev.id().to_hex()) < min_diff:
-                continue  # reject listings below the client's minimum PoW difficulty
+                self._stats["pow_rejected"] += 1  # below the client's minimum PoW difficulty
+                continue
             try:
                 listing = HostListing.from_nostr_event(
                     {
@@ -202,6 +206,12 @@ def publish(listing: HostListing) -> None:
 
 def discover() -> list[HostListing]:
     return get_backend().discover()
+
+
+def discovery_stats() -> dict:
+    """Stats from the most recent discover() — e.g. {"pow_rejected": n}. Lets the client surface
+    how many listings were filtered (rather than silently dropped)."""
+    return dict(getattr(get_backend(), "_stats", {}))
 
 
 def host_identity() -> str | None:

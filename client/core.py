@@ -23,11 +23,28 @@ from client import reputation
 from client import wallet
 
 
+class PaymentConfigError(RuntimeError):
+    """The client can't pay this host because of a CLIENT-side config mismatch (e.g. PAYMENTS=mock
+    against a real-wallet host), not a host fault. Surfaced clearly and NOT charged to the host's
+    local reputation."""
+
+
 def discover_hosts() -> list:
     """Discovered hosts (already PoW-filtered by registry), filtered to the client's model
-    allowlist (if configured), then ranked by local reputation."""
+    allowlist (if configured), then ranked by local reputation. Pure discovery — never pays."""
     hosts = [h for h in registry.discover() if moderation.is_model_allowed(h.models[0].name)]
     return reputation.rank(hosts, reputation.load())
+
+
+def discover_hosts_detailed() -> dict:
+    """Like discover_hosts() but also reports what was filtered out, so `--list` can show it
+    instead of a bare 'No hosts found'. Never touches a pay path."""
+    raw = registry.discover()
+    pow_rejected = registry.discovery_stats().get("pow_rejected", 0)
+    allowed = [h for h in raw if moderation.is_model_allowed(h.models[0].name)]
+    kept, hidden = reputation.partition(allowed, reputation.load())
+    return {"hosts": kept, "rep_hidden": len(hidden),
+            "allowlist_hidden": len(raw) - len(allowed), "pow_rejected": pow_rejected}
 
 
 def proxy_for(endpoint: str) -> str | None:
@@ -102,6 +119,11 @@ def pay_invoice(endpoint: str, ch: dict, proxy: str | None = None) -> str:
     if mode == "nwc":
         return nwc_pay(ch["invoice"])      # user's own wallet over NWC, never via Tor
     r = httpx.post(f"{endpoint}/mock/pay", json={"payment_hash": ch["payment_hash"]}, proxy=proxy)
+    if r.status_code == 404:
+        # Real hosts (phoenixd/LND) have no /mock/pay route — this is a mock-vs-real MISMATCH on
+        # OUR side, not a host failure. Surface it clearly; don't blame the host's reputation.
+        raise PaymentConfigError(
+            "this host needs a real wallet (NWC or LND) — you're in PAYMENTS=mock mode")
     r.raise_for_status()
     return r.json()["preimage"]
 
@@ -121,6 +143,7 @@ def run_inference(host, prompt: str, max_tokens: int = 64) -> Iterator[dict]:
     stream_timeout = httpx.Timeout(connect=15.0, read=read_to, write=15.0, pool=15.0)
     t0 = time.monotonic()
     ok = False
+    penalize = True  # a CLIENT-side config error (mock-vs-real) must not bury the host's reputation
     spent_msat = 0
     latency_ms = 0.0
     try:
@@ -162,12 +185,16 @@ def run_inference(host, prompt: str, max_tokens: int = 64) -> Iterator[dict]:
         ok = True
         latency_ms = (time.monotonic() - t0) * 1000
         yield {"type": "done", "spent_msat": spent_msat, "latency_ms": round(latency_ms, 1)}
+    except PaymentConfigError as e:  # our config, not the host's fault -> don't penalize reputation
+        penalize = False
+        yield {"type": "error", "kind": "config", "message": str(e)}
     except httpx.TransportError as e:  # connect refused / Tor-unreachable / timeout / network drop
         yield {"type": "error", "kind": "unreachable", "message": str(e)}
     except Exception as e:  # noqa: BLE001 - surface any other failure as an event
         yield {"type": "error", "kind": "other", "message": str(e)}
     finally:
-        reputation.record(host.pubkey, success=ok, latency_ms=(latency_ms if ok else None))
+        if penalize:
+            reputation.record(host.pubkey, success=ok, latency_ms=(latency_ms if ok else None))
 
 
 def run_inference_bolt11(host, prompt: str, max_tokens: int = 64,
