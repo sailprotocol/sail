@@ -6,7 +6,12 @@ Run:  PYTHONPATH=. python3 smoke_test.py
 """
 import json
 import os
+import tempfile
 import types
+# Hermetic: publish into a THROWAWAY registry dir, never the real ./registry (which the client
+# reads when REGISTRY=local). Set before importing the daemon so its startup publish lands here.
+if "REGISTRY_DIR" not in os.environ:
+    os.environ["REGISTRY_DIR"] = tempfile.mkdtemp(prefix="sail-smoke-registry-")
 os.environ.setdefault("PAYMENTS", "mock")
 os.environ.setdefault("MODEL", "mock")
 os.environ.setdefault("POW_TARGET", "8")          # trivial difficulty: mines instantly

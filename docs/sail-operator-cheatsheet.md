@@ -45,12 +45,16 @@ curl -s -u ":$PW" http://127.0.0.1:9740/listchannels; echo    # [] = no channel
 ENV_FILE=.env.client PYTHONPATH=. .venv/bin/uvicorn client.webapp:app --port 8090
 #   → open http://localhost:8090   (Ctrl-C to stop)
 
-# list hosts from the CLI:
+# list hosts from the CLI (ALWAYS pass ENV_FILE=.env.client — without it REGISTRY
+# defaults to 'local' and you'll see stale ./registry test listings, not the relays):
 ENV_FILE=.env.client PYTHONPATH=. .venv/bin/python -m client.cli --list
 
 # local reputation (if a host gets hidden):
 ENV_FILE=.env.client PYTHONPATH=. .venv/bin/python -m client.cli --reputation        # inspect
 ENV_FILE=.env.client PYTHONPATH=. .venv/bin/python -m client.cli --reset-reputation  # clear
+
+# clear stale local-dir test listings (mock/localhost) if you ever ran --list without ENV_FILE:
+PYTHONPATH=. .venv/bin/python -m client.cli --purge-local-registry        # (--all = wipe the dir)
 ```
 
 ## When a port is "address already in use"  (run ON that box)

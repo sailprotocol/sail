@@ -252,6 +252,43 @@ def discovery_stats() -> dict:
     return dict(getattr(get_backend(), "_stats", {}))
 
 
+def _is_test_listing(event: dict) -> bool:
+    """A local-registry listing that's a dev/test artifact: localhost endpoint, a mock model, or a
+    placeholder host_xxxx pubkey. Real hosts have a .onion endpoint + real model + real hex key."""
+    try:
+        content = json.loads(event.get("content", "{}"))
+        endpoint = content.get("endpoint", "")
+        models = content.get("models") or [{}]
+        model = (models[0] or {}).get("name", "")
+        pubkey = event.get("pubkey", "")
+        return ("127.0.0.1" in endpoint or "localhost" in endpoint
+                or model.startswith("mock") or pubkey.startswith("host_"))
+    except Exception:
+        return True  # unparseable junk -> remove
+
+
+def purge_local_registry(stale_only: bool = True) -> dict:
+    """Remove listings from the LOCAL registry dir (REGISTRY_DIR, default ./registry). With
+    stale_only, remove ONLY dev/test artifacts (localhost/mock/host_xxxx) and keep real ones;
+    otherwise wipe everything. Returns {removed, kept, dir}. Local dir only — never the relays."""
+    d = pathlib.Path(os.getenv("REGISTRY_DIR", "./registry"))
+    removed = kept = 0
+    if d.exists():
+        for f in d.glob("*.json"):
+            drop = True
+            if stale_only:
+                try:
+                    drop = _is_test_listing(json.loads(f.read_text()))
+                except Exception:
+                    drop = True
+            if drop:
+                f.unlink()
+                removed += 1
+            else:
+                kept += 1
+    return {"removed": removed, "kept": kept, "dir": str(d)}
+
+
 def host_identity() -> str | None:
     """The host's stable identity pubkey for the selected backend (None for local)."""
     return get_backend().host_pubkey()

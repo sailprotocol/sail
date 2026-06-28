@@ -10,6 +10,10 @@ the best one, and streams the response while tallying sats. All the real logic l
     python -m client.cli --reputation          # inspect the local reputation store
     python -m client.cli --reset-reputation    # clear it (un-bury hosts dropped by past errors)
     python -m client.cli --nwc-check           # probe the NWC wallet link (no payment)
+    python -m client.cli --purge-local-registry  # clear stale local-dir test listings (--all = wipe)
+
+Discovery backend is REGISTRY (env): nostr (relays) for the real client, local (./registry dir)
+for dev. Run the real client with ENV_FILE=.env.client so it discovers over Nostr relays.
 """
 from __future__ import annotations
 
@@ -22,6 +26,13 @@ from client import core, reputation
 
 def _cmd_list() -> None:
     """Discovery only — never touches a pay path. Shows kept hosts and what was filtered out."""
+    import os
+    backend = os.getenv("REGISTRY", "local").lower()
+    if backend == "nostr":
+        print(f"[client] discovery: nostr relays ({os.getenv('NOSTR_RELAYS', '(none set)')})")
+    else:
+        print(f"[client] discovery: LOCAL registry dir ({os.getenv('REGISTRY_DIR', './registry')}) "
+              f"— for real relay discovery run with ENV_FILE=.env.client (REGISTRY=nostr)")
     d = core.discover_hosts_detailed()
     for h in d["hosts"]:
         print(f"  {alias_label(h.pubkey)}  [{h.pubkey[:16]}…]  {h.models[0].name} @ {h.endpoint}")
@@ -71,6 +82,15 @@ def _cmd_reset_reputation() -> None:
           else "[client] no local reputation store to clear.")
 
 
+def _cmd_purge_local_registry(all_: bool) -> None:
+    """Clear stale dev/test listings (localhost/mock/host_xxxx) from the LOCAL registry dir, or all
+    of them with --all. Does NOT touch relay (nostr) discovery."""
+    from shared import registry
+    r = registry.purge_local_registry(stale_only=not all_)
+    kind = "all" if all_ else "stale/test"
+    print(f"[client] purged {r['removed']} {kind} local listing(s) from {r['dir']}; kept {r['kept']}.")
+
+
 def _cmd_nwc_check() -> None:
     """Diagnose the NWC link without paying — does a NIP-47 get_info round-trip on the wallet's
     relay, so a pay failure can be attributed (relay/wallet vs payment-specific)."""
@@ -112,6 +132,8 @@ def main() -> None:
         return _cmd_reputation()
     if argv and argv[0] == "--reset-reputation":
         return _cmd_reset_reputation()
+    if argv and argv[0] == "--purge-local-registry":
+        return _cmd_purge_local_registry(all_="--all" in argv)
     prompt = " ".join(argv) or "Say hello from the network."
 
     hosts = core.discover_hosts()
