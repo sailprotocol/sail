@@ -191,7 +191,14 @@ class PhoenixdLightning(LightningBackend):
         except (httpx.HTTPError, ValueError) as e:
             return {"receivable": None, "detail": f"phoenixd unreachable: {str(e)[:80]}"}
         channels = channels if isinstance(channels, list) else []
-        states = [c.get("state") for c in channels if isinstance(c, dict)]
+        # phoenixd reports the channel state in "type" as a fully-qualified lightning-kmp class
+        # name, e.g. "fr.acinq.lightning.channel.states.Normal" (NOT a bare "Normal", and there is
+        # no top-level "state" field). The short state is the last dotted component; fall back to a
+        # legacy "state" field if present. A "Normal" channel is open and usable -> receivable.
+        def _state(c: dict) -> str:
+            raw = c.get("type") or c.get("state") or ""
+            return str(raw).rsplit(".", 1)[-1]
+        states = [_state(c) for c in channels if isinstance(c, dict)]
         receivable = "Normal" in states  # an open, usable channel
 
         balance_sat = fee_credit_sat = None

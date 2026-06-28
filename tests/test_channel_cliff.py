@@ -90,10 +90,12 @@ def test_phoenixd_no_channel_is_not_receivable_with_bootstrap_path():
 
 
 def test_phoenixd_normal_channel_is_receivable():
-    # host #2's healthy state: an open, usable channel -> live, unaffected
+    # host #2's healthy state, in REAL phoenixd shape: state lives in "type" as a fully-qualified
+    # lightning-kmp class name ("...states.Normal"), NOT a bare "Normal"/top-level "state" field.
     p = _phoenixd_with({
-        "/listchannels": _Resp([{"state": "Normal", "channelId": "abc"}]),
-        "/getbalance": _Resp({"balanceSat": 40000, "feeCreditSat": 0}),
+        "/listchannels": _Resp([{"channelId": "abc",
+                                 "type": "fr.acinq.lightning.channel.states.Normal"}]),
+        "/getbalance": _Resp({"balanceSat": 2000000, "feeCreditSat": 0}),
     })
     st = p.receive_status()
     assert st["receivable"] is True, st
@@ -102,9 +104,9 @@ def test_phoenixd_normal_channel_is_receivable():
 
 
 def test_phoenixd_channel_present_but_not_normal_is_not_receivable():
-    # opening/offline channel -> present but not usable yet
+    # opening channel, real phoenixd shape -> present but not usable yet
     p = _phoenixd_with({
-        "/listchannels": _Resp([{"state": "Opening"}]),
+        "/listchannels": _Resp([{"type": "fr.acinq.lightning.channel.states.WaitForFundingConfirmed"}]),
         "/getbalance": _Resp({"balanceSat": 0, "feeCreditSat": 0}),
     })
     st = p.receive_status()
