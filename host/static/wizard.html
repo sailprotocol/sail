@@ -451,11 +451,22 @@ async function pollLive(){
 async function liveDone(st){
   $('livebusy').style.display='none'; $('manualrestart').style.display='none'; $('livedone').style.display='block';
   const payable = !!st.payments_ready;
-  $('liveh').textContent = payable ? 'Your host is live' : 'Host running — but not payable yet';
+  const canReceive = st.receivable !== false;   // false = phoenixd has no inbound channel yet
+  const earning = payable && canReceive;
+  $('liveh').textContent = earning ? 'Your host is live'
+    : (!payable ? 'Host running — but not payable yet' : 'Host running — but can’t receive yet');
   const pub=st.pubkey||''; $('alias').textContent = st.alias_label || ('host · '+pub.slice(0,4));
   $('l-onion').textContent=st.onion; $('l-pub').textContent=pub.slice(0,8)+'…'+pub.slice(-6);
-  $('l-pay').innerHTML = payable ? `<span class="pill good">● ${st.payments} ready</span>`
-    : `<span class="pill bad">● ${st.payments_detail||'not responding'}</span>`;
+  $('l-pay').innerHTML = !payable ? `<span class="pill bad">● ${st.payments_detail||'not responding'}</span>`
+    : canReceive ? `<span class="pill good">● ${st.payments} ready</span>`
+    : `<span class="pill bad">● ${st.payments} — no channel yet</span>`;
+  // phoenixd channel cliff: discoverable + serving, but clients can't pay until a channel opens
+  if (payable && !canReceive){
+    $('manualrestart').style.display='block';
+    $('manualrestart').innerHTML = `<b>Can’t receive payments yet.</b> ${st.receive_detail||''}<br>`
+      + `Your host is discoverable and will serve, but clients can’t pay you until phoenixd has an `
+      + `inbound channel. Open one by paying your node an initial <b>~25–35k sat</b> from another wallet.`;
+  }
   try{ const t=await api('/api/selftest'); $('l-test').innerHTML = t.ok? '<span class="pill good">● 402 passing</span>' : '<span class="pill bad">● failed</span>'; }
   catch{ $('l-test').innerHTML='<span class="pill q">unavailable</span>'; }
   nextBtn.disabled=false; nextBtn.textContent='Open dashboard'; nextBtn.onclick=()=>{ window.location='/'; };

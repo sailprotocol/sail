@@ -460,20 +460,26 @@ def dashboard(request: Request):
 
 
 _PAY_HEALTH_TTL = 30  # seconds; payment-API pings are cached so /api/status polling stays cheap
-_pay_health = {"ts": 0.0, "ok": None, "detail": ""}
+_pay_health = {"ts": 0.0, "ok": None, "detail": "", "receivable": True, "receive_detail": "ok"}
 
 
-def _payments_ready() -> tuple[bool, str]:
-    """Is the payment backend's API actually responding? (cached). Used to refuse to declare a host
-    'live'/payable when its node or wallet can't issue invoices."""
+def _payments_health() -> dict:
+    """Cached payment-backend health: API reachable (ping) AND able to receive (receive_status —
+    the phoenixd channel-cliff guard). Refuse to declare a host 'live to earn' when either fails."""
     now = time.time()
     if _pay_health["ok"] is None or now - _pay_health["ts"] > _PAY_HEALTH_TTL:
         try:
             ok, detail = _ln.ping()
         except Exception as e:  # noqa: BLE001
             ok, detail = False, str(e)[:120]
-        _pay_health.update(ts=now, ok=bool(ok), detail=detail)
-    return _pay_health["ok"], _pay_health["detail"]
+        try:
+            rs = _ln.receive_status()
+            receivable, receive_detail = rs.get("receivable"), rs.get("detail", "")
+        except Exception as e:  # noqa: BLE001
+            receivable, receive_detail = None, str(e)[:120]
+        _pay_health.update(ts=now, ok=bool(ok), detail=detail,
+                           receivable=receivable, receive_detail=receive_detail)
+    return _pay_health
 
 
 @app.get("/api/status")
@@ -481,7 +487,8 @@ def api_status(request: Request):
     if not _is_local(request):
         return JSONResponse({"error": "not found"}, status_code=404)
     t = _today()
-    pay_ok, pay_detail = _payments_ready()
+    _h = _payments_health()
+    pay_ok, pay_detail = _h["ok"], _h["detail"]
     # in-progress metered generations (started, not yet done) shown as "streaming"
     streaming = [{"tag": sid[:4], "model": _model.name, "tokens": v["emitted"],
                   "msat": v["charged_msat"], "state": "streaming"}
@@ -497,6 +504,8 @@ def api_status(request: Request):
         "payments": os.getenv("PAYMENTS", "mock").lower(),
         "payments_ready": pay_ok,        # payment backend API is responding (host is payable)
         "payments_detail": pay_detail,
+        "receivable": _h["receivable"],          # can actually RECEIVE (phoenixd channel-cliff guard)
+        "receive_detail": _h["receive_detail"],
         "price_msat_per_token": PRICE_MSAT_PER_TOKEN,
         "chunk_tokens": CHUNK_TOKENS,
         "invoice_expiry_s": BOLT11_EXPIRY_SECONDS,

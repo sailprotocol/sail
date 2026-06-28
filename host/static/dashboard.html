@@ -278,8 +278,11 @@ async function refresh(){
   intent=null; if(mode!=='live'){ mode='live'; $('hero').className='hero'; renderControls('live'); }
   $('led').className='led ok';
   $('hstate').textContent = "You're hosting";
-  $('hsub').innerHTML = `<b style="color:var(--beacon-2)">${d.alias_label||''}</b> · serving ${d.model} over ${d.transport} · up ${fmtUptime(d.uptime_s)}`;
-  $('t-rail').textContent = d.payments; $('c-rail').textContent = d.payments;
+  const cliff = d.receivable === false;  // phoenixd has no inbound channel yet -> can't be paid
+  $('hsub').innerHTML = `<b style="color:var(--beacon-2)">${d.alias_label||''}</b> · serving ${d.model} over ${d.transport} · up ${fmtUptime(d.uptime_s)}`
+    + (cliff ? ` · <span style="color:var(--bad)" title="${(d.receive_detail||'').replace(/"/g,'')}">⚠ can’t receive yet — open a channel (~25–35k sat inbound)</span>` : '');
+  $('t-rail').textContent = d.payments;
+  $('c-rail').innerHTML = cliff ? `${d.payments} — <span style="color:var(--bad)">no channel yet</span>` : d.payments;
   $('t-pub').textContent = (d.pubkey||'').slice(0,8)+'…';
   $('pubfull').textContent = (d.pubkey||'').slice(0,8)+'…'+(d.pubkey||'').slice(-6);
   $('onion').textContent = d.onion; $('copyonion').dataset.c = d.onion;

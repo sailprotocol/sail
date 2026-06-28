@@ -51,6 +51,12 @@ class LightningBackend:
         host 'live' (payable) when its node/wallet can't actually issue invoices. Default: ok."""
         return True, "ok"
 
+    def receive_status(self) -> dict:
+        """Can the backend actually RECEIVE right now? Most backends always can — only phoenixd has
+        the channel cliff (no inbound channel until a bootstrap payment). Default: receivable.
+        Returns {receivable: bool|None, detail: str, ...extras}."""
+        return {"receivable": True, "detail": "ok"}
+
 
 class MockLightning(LightningBackend):
     """No real node. Generates a real preimage/hash pair and 'settles' on demand."""
@@ -172,6 +178,41 @@ class PhoenixdLightning(LightningBackend):
             return False, f"phoenixd unreachable: {str(e)[:80]}"
         return (r.status_code == 200, "phoenixd ok" if r.status_code == 200
                 else f"phoenixd HTTP {r.status_code}")
+
+    def receive_status(self) -> dict:
+        """The channel cliff: phoenixd can't RECEIVE until an inbound channel exists. A brand-new
+        node holds the first inbound payment as feeCreditSat with NO channel (listchannels empty),
+        so it can't be paid until ~25-35k sat opens one. Detect that and report it so go-live /
+        the dashboard don't claim 'live to earn' when the host silently can't earn."""
+        try:
+            r = self._client.get("/listchannels")
+            r.raise_for_status()
+            channels = r.json()
+        except (httpx.HTTPError, ValueError) as e:
+            return {"receivable": None, "detail": f"phoenixd unreachable: {str(e)[:80]}"}
+        channels = channels if isinstance(channels, list) else []
+        states = [c.get("state") for c in channels if isinstance(c, dict)]
+        receivable = "Normal" in states  # an open, usable channel
+
+        balance_sat = fee_credit_sat = None
+        try:
+            b = self._client.get("/getbalance")
+            if b.status_code == 200:
+                j = b.json()
+                balance_sat, fee_credit_sat = j.get("balanceSat"), j.get("feeCreditSat")
+        except httpx.HTTPError:
+            pass
+
+        if receivable:
+            detail = f"channel open · receivable (balance {balance_sat} sat)"
+        elif channels:
+            detail = f"channel(s) present but not usable yet (state: {', '.join(map(str, states))})"
+        else:
+            credit = f" {fee_credit_sat} sat held as fee credit;" if fee_credit_sat else ""
+            detail = ("no inbound channel yet — can't receive payments." + credit
+                      + " Open one with an initial inbound payment of ~25-35k sat (current fees).")
+        return {"receivable": receivable, "detail": detail, "channels": len(channels),
+                "balance_sat": balance_sat, "fee_credit_sat": fee_credit_sat}
 
 
 def _nwc_run(coro_factory):

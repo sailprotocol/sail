@@ -45,9 +45,11 @@ class _FailingModel:
 
 def test_host_emits_error_trailer_and_charges_only_inflight_chunk():
     from fastapi.testclient import TestClient
+    from host.payments import MockLightning
     import host.daemon as d
 
     d._model = _FailingModel()
+    d._ln = MockLightning()  # explicit: prior tests may leave _ln as a phoenixd fake (no /mock/pay)
     c = TestClient(d.app)
 
     r = c.post("/v1/inference", json={"prompt": "hi", "max_tokens": 24})

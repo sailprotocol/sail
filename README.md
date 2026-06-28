@@ -61,6 +61,14 @@ documented in the docs:
 
 📖 **[sailprotocol.com/docs](https://sailprotocol.com/docs/)**
 
+> **phoenixd hosts — the channel cliff.** A fresh phoenixd node can't *receive* until it has an
+> inbound channel, and it won't open one until an initial inbound payment exceeds the open cost
+> (**~25–35k sat** at current fees). Below that, the payment is held as `feeCreditSat` with **no
+> channel** and the host **cannot be paid** — the setup wizard and dashboard will say *"running, but
+> can't receive yet"* rather than "live to earn". Cross the cliff by paying your own node a one-time
+> **~25–35k sat** inbound (from another wallet) to open the channel; after that it shows **live**.
+> Per-token micro-payments (8 sat) will never bootstrap this on their own.
+
 ## Honest notes (please read)
 
 - **The host can see your prompt and response.** Inference runs on the host's hardware in plaintext
