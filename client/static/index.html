@@ -291,11 +291,19 @@ async function loadWallet() {
   $("bolt11toggle").checked = (payments === "nwc" && !walletConnected);
   if (w.payments !== "nwc") { $("walletsec").style.display = "none"; return; }  // only relevant for PAYMENTS=nwc
   $("walletsec").style.display = "";
-  if (w.connected) {
+  if (w.connected && w.source === "env") {
+    // Configured via NWC_URI in the environment — the GUI can't clear an env var.
+    $("walletbody").innerHTML = `<div class="ok">● connected (via NWC_URI env)</div>`
+      + `<div class="meta pk" style="font-family:monospace">${(w.wallet_pubkey||"").slice(0,24)}…</div>`
+      + `<div class="note">Set via your environment. To change or remove it, unset/edit NWC_URI in your .env.client and restart — Disconnect can't clear a config-pinned wallet.</div>`;
+  } else if (w.connected) {
     $("walletbody").innerHTML = `<div class="ok">● connected</div>`
       + `<div class="meta pk" style="font-family:monospace">${(w.wallet_pubkey||"").slice(0,24)}…</div>`
       + `<button id="nwcoff" class="link">Disconnect</button>`;
-    $("nwcoff").onclick = async () => { await fetch("/api/wallet", {method:"DELETE"}); loadWallet(); };
+    $("nwcoff").onclick = async () => {
+      await fetch("/api/wallet", {method:"DELETE"});
+      loadWallet();  // returns to the connect/paste screen
+    };
   } else {
     $("walletbody").innerHTML = `<input id="nwcin" placeholder="nostr+walletconnect://…">`
       + `<button id="nwcon" class="primary">Connect</button>`

@@ -104,6 +104,14 @@ def _run_async(coro_factory):
 _nwc = None  # cached Nwc client, so the wallet relay connection is reused across chunks
 
 
+def reset_nwc_client() -> None:
+    """Drop the cached Nwc client so the next payment rebuilds it from the CURRENT NWC_URI. Must be
+    called whenever the wallet connection changes (connect/disconnect) — otherwise a reconnect would
+    silently keep paying from the old wallet."""
+    global _nwc
+    _nwc = None
+
+
 NWC_PAY_TIMEOUT = float(os.getenv("NWC_PAY_TIMEOUT", "120"))  # cap so a stuck wallet/relay fails clean
 
 

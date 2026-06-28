@@ -36,11 +36,12 @@ def save(uri: str) -> None:
     tmp.replace(p)  # atomic
 
 
-def load_uri() -> str | None:
-    """The connection string from env NWC_URI (preferred) or the local store; None if neither."""
+def _env_uri() -> str | None:
     env = os.getenv("NWC_URI")
-    if env and env.strip():
-        return env.strip()
+    return env.strip() if env and env.strip() else None
+
+
+def _store_uri() -> str | None:
     p = _path()
     if not p.exists():
         return None
@@ -50,7 +51,14 @@ def load_uri() -> str | None:
         return None
 
 
+def load_uri() -> str | None:
+    """The connection string from env NWC_URI (preferred) or the local GUI store; None if neither."""
+    return _env_uri() or _store_uri()
+
+
 def clear() -> bool:
+    """Remove the GUI-managed (stored) connection. Returns False if there was no store file. Note an
+    env NWC_URI is config, NOT GUI-managed — it can't be cleared here (status reports source='env')."""
     p = _path()
     if p.exists():
         p.unlink()
@@ -59,14 +67,16 @@ def clear() -> bool:
 
 
 def status() -> dict:
-    """Connection status WITHOUT exposing the secret — connected flag + wallet service pubkey."""
-    uri = load_uri()
+    """Connection status WITHOUT exposing the secret — connected flag, wallet pubkey, and SOURCE
+    (env vs store) so the GUI knows whether Disconnect can clear it."""
+    env, store = _env_uri(), _store_uri()
+    uri = env or store
+    source = "env" if env else ("store" if store else None)
     if not uri:
-        return {"connected": False, "wallet_pubkey": None}
+        return {"connected": False, "wallet_pubkey": None, "source": None}
     try:
         # The wallet service pubkey is the URI authority (before '?'); safe to surface.
-        body = uri.split("://", 1)[1]
-        pubkey = body.split("?", 1)[0]
-        return {"connected": True, "wallet_pubkey": pubkey}
+        pubkey = uri.split("://", 1)[1].split("?", 1)[0]
     except Exception:
-        return {"connected": True, "wallet_pubkey": None}
+        pubkey = None
+    return {"connected": True, "wallet_pubkey": pubkey, "source": source}

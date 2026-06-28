@@ -218,10 +218,12 @@ def api_wallet_connect(req: WalletConnect):
         wallet.save(req.uri)  # validates the NWC string format
     except Exception as e:
         return JSONResponse({"error": f"invalid NWC connection string: {e}"}, status_code=400)
+    core.reset_nwc_client()  # rebuild from the new URI on the next payment (no stale wallet)
     return _wallet_status()
 
 
 @app.delete("/api/wallet")
 def api_wallet_disconnect():
     wallet.clear()
+    core.reset_nwc_client()  # forget the old wallet so a reconnect can't keep paying from it
     return _wallet_status()
