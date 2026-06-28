@@ -44,8 +44,15 @@ def _cmd_list() -> None:
     for p in d["pow_hidden"]:
         print(f"    - {alias_label(p['pubkey'])}  PoW {p['bits']}<{p['required']}"
               + ("  (host published with no/low PoW — raise its POW_TARGET)" if p["bits"] < p["required"] // 2 else ""))
+    # Reputation-hidden: show WHY (consecutive failures) and that it clears on its own.
+    for r in d.get("rep_hidden_detail", []):
+        clears = r.get("clears_in_s", 0)
+        when = f"clears in ~{max(1, round(clears / 60))}m" if clears else "clears now"
+        print(f"    - {alias_label(r['pubkey'])}  {r.get('consecutive', '?')} consecutive "
+              f"failures, last {round(r.get('age_s', 0) / 60)}m ago — auto-{when}")
     if d["rep_hidden"]:
-        print("[client] un-bury reputation-hidden hosts with: python -m client.cli --reset-reputation")
+        print("[client] (reputation-hidden hosts re-surface on their own; "
+              "force it now with: python -m client.cli --reset-reputation)")
 
 
 def _cmd_reputation() -> None:

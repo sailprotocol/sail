@@ -16,10 +16,14 @@ import os
 import pathlib
 import time
 
-REP_MIN_ATTEMPTS = 3    # require this many tries before judging a host harshly
-REP_FAIL_RATE = 0.34    # success rate below this (after MIN_ATTEMPTS) -> drop the host
-REP_MAX_CONSEC = 3      # this many failures in a row -> drop the host
+REP_HIDE_CONSEC = 3     # hide only after THIS many consecutive HOST failures (never on the first)
 _EWMA = 0.3             # latency smoothing factor
+
+
+def _cooldown() -> int:
+    """Seconds a hidden host stays hidden before it re-surfaces on its own (no manual reset). The
+    penalty decays so a transient blip (flaky Tor, momentary host hiccup) clears itself."""
+    return int(os.getenv("REP_COOLDOWN_SECONDS", "600"))
 
 
 def _path() -> pathlib.Path:
@@ -55,8 +59,11 @@ def record(pubkey: str, *, success: bool, latency_ms: float | None = None,
             s["ewma_latency_ms"] = round(
                 latency_ms if prev is None else _EWMA * latency_ms + (1 - _EWMA) * prev, 1)
     else:
+        # Only HOST-fault outcomes reach here — run_inference does NOT record client-side payment
+        # failures (dead/unreachable wallet, no route, NWC relay down), so they never bury a host.
         s["failures"] += 1
         s["consecutive_failures"] += 1
+        s["last_fail_ts"] = int(time.time())
     rep[pubkey] = s
 
     p = _path()
@@ -70,12 +77,25 @@ def _success_rate(s: dict) -> float:
 
 
 def _is_bad(s: dict | None) -> bool:
-    """A host we've tried enough and that keeps failing — drop it from candidates."""
+    """Hide a host ONLY when it has racked up REP_HIDE_CONSEC consecutive host failures AND the last
+    one was within the cooldown. A single failure never hides it; after the cooldown the host
+    re-surfaces on its own (no manual reset). Poor success-rate still down-RANKS (see key()) but
+    never hides — so a good host isn't buried by a transient blip, while a genuinely dead host
+    keeps re-failing and stays effectively de-prioritized."""
     if not s:
         return False
-    if s.get("consecutive_failures", 0) >= REP_MAX_CONSEC:
-        return True
-    return s["attempts"] >= REP_MIN_ATTEMPTS and _success_rate(s) < REP_FAIL_RATE
+    if s.get("consecutive_failures", 0) < REP_HIDE_CONSEC:
+        return False
+    return (time.time() - s.get("last_fail_ts", 0)) < _cooldown()
+
+
+def hidden_reason(s: dict | None) -> dict:
+    """Why a host is hidden + when it clears, for --list. {consecutive, age_s, clears_in_s}."""
+    if not s:
+        return {}
+    age = int(time.time() - s.get("last_fail_ts", 0))
+    return {"consecutive": s.get("consecutive_failures", 0), "age_s": age,
+            "clears_in_s": max(0, _cooldown() - age)}
 
 
 def partition(hosts, rep: dict):

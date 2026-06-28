@@ -48,9 +48,12 @@ def discover_hosts_detailed() -> dict:
     instead of a bare 'No hosts found'. Never touches a pay path."""
     raw = registry.discover()
     stats = registry.discovery_stats()
+    rep = reputation.load()
     allowed = [h for h in raw if moderation.is_model_allowed(h.models[0].name)]
-    kept, hidden = reputation.partition(allowed, reputation.load())
-    return {"hosts": kept, "rep_hidden": len(hidden),
+    kept, hidden = reputation.partition(allowed, rep)
+    rep_hidden_detail = [{"pubkey": h.pubkey, **reputation.hidden_reason(rep.get(h.pubkey))}
+                         for h in hidden]  # why each is down + when it clears (for --list)
+    return {"hosts": kept, "rep_hidden": len(hidden), "rep_hidden_detail": rep_hidden_detail,
             "allowlist_hidden": len(raw) - len(allowed),
             "pow_rejected": stats.get("pow_rejected", 0),
             "pow_hidden": stats.get("pow_hidden", []),       # [{pubkey, bits, required}]
@@ -311,7 +314,19 @@ def run_inference(host, prompt: str, max_tokens: int = 64) -> Iterator[dict]:
 
         # Pay each chunk, stream it, follow the trailer to the next chunk until done.
         while True:
-            preimage = pay_invoice(ep, ch, proxy)
+            # Payment is the CLIENT's side (wallet / NWC relay / route). A failure here is NOT the
+            # host's fault, so we bail WITHOUT recording against the host's reputation (penalize off)
+            # — a dead wallet must never bury an innocent host.
+            try:
+                preimage = pay_invoice(ep, ch, proxy)
+            except PaymentConfigError as e:   # mock-vs-real mismatch (our config)
+                penalize = False
+                yield {"type": "error", "kind": "config", "message": str(e)}
+                return
+            except Exception as e:            # noqa: BLE001 — wallet/relay/route payment failure
+                penalize = False
+                yield {"type": "error", "kind": "payment_failed", "message": str(e)}
+                return
             spent_msat += ch["amount_msat"]
             _clog(f"paid (preimage_len={len(preimage or '')}) — re-requesting chunk over "
                   f"{'tor' if proxy else 'direct'}")
@@ -359,14 +374,14 @@ def run_inference(host, prompt: str, max_tokens: int = 64) -> Iterator[dict]:
         ok = True
         latency_ms = (time.monotonic() - t0) * 1000
         yield {"type": "done", "spent_msat": spent_msat, "latency_ms": round(latency_ms, 1)}
-    except PaymentConfigError as e:  # our config, not the host's fault -> don't penalize reputation
-        penalize = False
-        yield {"type": "error", "kind": "config", "message": str(e)}
-    except httpx.TransportError as e:  # connect refused / Tor-unreachable / timeout / network drop
+    except httpx.TransportError as e:  # couldn't reach/keep the HOST (Tor/host down) — host-side
         yield {"type": "error", "kind": "unreachable", "message": str(e)}
-    except Exception as e:  # noqa: BLE001 - surface any other failure as an event
+    except Exception as e:  # noqa: BLE001 - a host-side serve/response failure
         yield {"type": "error", "kind": "other", "message": str(e)}
     finally:
+        # Only HOST-fault outcomes reach record(): success, serve_failed, unreachable, bad response.
+        # Payment/config failures returned early with penalize=False (host untouched). A single
+        # host failure won't hide the host (needs N consecutive within the cooldown — see reputation).
         if penalize:
             reputation.record(host.pubkey, success=ok, latency_ms=(latency_ms if ok else None))
 
