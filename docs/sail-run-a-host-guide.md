@@ -31,11 +31,26 @@ Nostr. This guide takes you from a fresh Ubuntu box to a live, earning host.
 
 Install the GPU driver, Ollama (model server), Tor, and Python.
 
-```bash
-# NVIDIA driver (if not already installed) — reboot after:
-sudo ubuntu-drivers autoinstall && sudo reboot     # then verify:
-nvidia-smi                                          # should list your GPU
+First check whether you already have a working GPU driver:
 
+```bash
+nvidia-smi          # if this lists your GPU, skip the driver install below
+```
+
+If `nvidia-smi` works, skip ahead to Ollama. If it doesn't, install the driver — **a fresh
+driver install needs a reboot** before `nvidia-smi` works (the kernel module loads on boot):
+
+```bash
+sudo ubuntu-drivers autoinstall
+sudo reboot                         # reboot, then come back and re-run nvidia-smi to confirm
+```
+
+> ⚠️ That `reboot` will restart your machine. Only run it if you just installed the driver.
+> After rebooting, continue here.
+
+Then install Ollama, Tor, and Python:
+
+```bash
 # Ollama (serves the model locally):
 curl -fsSL https://ollama.com/install.sh | sh
 ollama --version
@@ -74,23 +89,25 @@ python3 -m venv .venv
 
 ## 3. Create your host config
 
-Copy the template. You do **not** need to fill in a payment backend by hand — a fresh host
-defaults to `PAYMENTS=mock` and boots straight into the setup wizard, which writes the real
-backend for you.
+Copy the template. The defaults are already set for a real host — Tor transport, Nostr
+discovery on public relays, and `PAYMENTS=mock` (which boots a fresh host straight into the
+setup wizard, where you pick your real payout backend). You only need to set your model.
 
 ```bash
 cp .env.example .env.host
 ```
 
-Open `.env.host` and set the basics (leave `PAYMENTS=mock` for now — the wizard changes it):
+Open `.env.host` and set the one thing that's specific to you:
 
-- `MODEL=ollama`, `OLLAMA_MODEL=<a model that fits your VRAM>` (e.g. `llama3.2:3b`)
-- `PORT=8001`
-- `TRANSPORT=tor`
-- `REGISTRY=nostr` and `NOSTR_RELAYS=wss://relay.damus.io,wss://nos.lol`
+- `OLLAMA_MODEL=<a model that fits your VRAM>` (e.g. `llama3.2:3b` for ~4 GB, `qwen3:14b` for ~14 GB)
 
-Everything else (identity, onion key, payout) is created for you on first run.
+That's it — `TRANSPORT=tor`, `REGISTRY=nostr`, and the public `NOSTR_RELAYS` are already the
+defaults. Identity, onion key, and payout are created/collected for you on first run and in
+the wizard.
 
+> **Local dev?** If you're just testing without Tor or relays, the template has commented
+> opt-outs: set `TRANSPORT=clearnet` and `REGISTRY=local`. Most operators leave the defaults.
+>
 > **Note:** the template's LND example paths point at a local dev setup — ignore them unless
 > you're using your own LND, in which case the wizard's payout step collects the real values.
 
