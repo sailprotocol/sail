@@ -185,16 +185,46 @@ def _nwc_run(coro_factory):
 
 
 def nwc_capability(uri: str) -> tuple[bool, str]:
-    """Can this NWC wallet RECEIVE? Reads its NIP-47 info event (get_info, kind 13194) and checks
-    it advertises make_invoice — many wallets are pay-only and can't host. Returns (ok, message);
-    the setup endpoint surfaces the message to the picker. Network call to the wallet's relay."""
+    """Can this NWC wallet RECEIVE (advertise make_invoice)? Many wallets are pay-only and can't
+    host. Returns (ok, message); the setup endpoint surfaces it to the picker.
+
+    PRIMARY: read the wallet's PLAINTEXT kind-13194 NIP-47 info event off its relay (reusing the
+    client's _nwc_fetch_info_event) — this avoids nostr-sdk's strict typed get_info deserialize,
+    which rejects modern wallets that advertise newer methods/notifications (sign_message,
+    payment_received, …) and would FALSELY reject a working receive-capable wallet.
+    FALLBACK: typed get_info, where a deserialize / unknown-method error means the wallet RESPONDED
+    (the SDK just couldn't map newer fields) — not a dead wallet. Only a real timeout = unavailable.
+    """
     try:
-        from nostr_sdk import Nwc, NostrWalletConnectUri, Method
-        client = Nwc(NostrWalletConnectUri.parse(uri))  # same transport the client uses to pay
-        info = _nwc_run(client.get_info)
-    except Exception as e:  # noqa: BLE001 — malformed URI, relay unreachable, or timeout
+        from nostr_sdk import NostrWalletConnectUri
+        p = NostrWalletConnectUri.parse(uri)
+        relays = [str(r) for r in p.relays()]
+        wallet_pk = p.public_key().to_hex()
+    except Exception as e:  # noqa: BLE001
+        return False, f"invalid NWC connection string: {str(e)[:120]}"
+
+    # PRIMARY — raw 13194 capabilities (plaintext; no strict typed parse)
+    from client.core import _nwc_fetch_info_event
+    info = _nwc_fetch_info_event(relays, wallet_pk)
+    if info.get("found"):
+        if "make_invoice" in info.get("methods", []):
+            return True, "ok"
+        return False, "this wallet can't receive over NWC (it doesn't advertise make_invoice)"
+
+    # FALLBACK — typed get_info
+    try:
+        from nostr_sdk import Nwc, NostrWalletConnectUri as _Uri, Method
+        client = Nwc(_Uri.parse(uri))  # same transport the client uses to pay
+        resp = _nwc_run(client.get_info)
+    except Exception as e:  # noqa: BLE001
+        detail = f"{type(e).__name__}: {e}"
+        if any(s in detail.lower() for s in ("deserialize", "unknown method", "unknown notification")):
+            # The wallet REPLIED; the SDK couldn't map newer fields and there's no 13194 to read.
+            # Don't block a live wallet on a parse quirk — if it's truly pay-only, create_invoice
+            # will fail clearly at first use.
+            return True, "ok (wallet responded; capabilities unverified — SDK couldn't parse get_info)"
         return False, f"couldn't reach the NWC wallet: {str(e)[:140]}"
-    if Method.MAKE_INVOICE not in info.methods:
+    if Method.MAKE_INVOICE not in resp.methods:
         return False, "this wallet can't receive over NWC (it doesn't support make_invoice)"
     return True, "ok"
 

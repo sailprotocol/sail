@@ -207,6 +207,66 @@ def test_nwc_check_real_no_response_is_flagged():
         assert d["ok"] is False and "premature exit" in d["detail"], d
 
 
+def _valid_nwc_uri():
+    from nostr_sdk import Keys
+    wallet, secret = Keys.generate(), Keys.generate()
+    return (f"nostr+walletconnect://{wallet.public_key().to_hex()}"
+            f"?relay=wss://relay.example&secret={secret.secret_key().to_hex()}")
+
+
+@contextmanager
+def _capability_env(info_event, run_async=None):
+    """Patch the host capability guard's collaborators: the client's 13194 fetch + the host _nwc_run."""
+    from client import core
+    from host import payments
+    saved = (core._nwc_fetch_info_event, payments._nwc_run)
+    try:
+        core._nwc_fetch_info_event = lambda relays, pk: info_event
+        if run_async is not None:
+            payments._nwc_run = run_async
+        yield payments
+    finally:
+        core._nwc_fetch_info_event, payments._nwc_run = saved
+
+
+def test_nwc_capability_via_13194_make_invoice():
+    with _capability_env({"found": True, "methods": ["make_invoice", "pay_invoice"]}) as p:
+        ok, msg = p.nwc_capability(_valid_nwc_uri())
+        assert ok is True, (ok, msg)
+
+
+def test_nwc_capability_13194_pay_only_rejected():
+    with _capability_env({"found": True, "methods": ["pay_invoice", "get_info"]}) as p:
+        ok, msg = p.nwc_capability(_valid_nwc_uri())
+        assert ok is False and "make_invoice" in msg, (ok, msg)
+
+
+def test_nwc_capability_deserialize_error_is_responded_not_dead():
+    """THE FIX: modern wallet, no 13194 read, get_info deserialize fails -> wallet RESPONDED, so the
+    receive-tier setup must NOT falsely reject it."""
+    def _boom(f):
+        raise Exception("Can't deserialize response: error=Unknown method: sign_message")
+    with _capability_env({"found": False}, run_async=_boom) as p:
+        ok, msg = p.nwc_capability(_valid_nwc_uri())
+        assert ok is True and "unverified" in msg, (ok, msg)
+
+
+def test_nwc_capability_real_timeout_unavailable():
+    def _boom(f):
+        raise Exception("Generic: premature exit")
+    with _capability_env({"found": False}, run_async=_boom) as p:
+        ok, msg = p.nwc_capability(_valid_nwc_uri())
+        assert ok is False and "couldn't reach" in msg, (ok, msg)
+
+
+def test_nwc_capability_get_info_fallback_ok():
+    from nostr_sdk import Method
+    with _capability_env({"found": False},
+                         run_async=lambda f: types.SimpleNamespace(methods=[Method.MAKE_INVOICE])) as p:
+        ok, msg = p.nwc_capability(_valid_nwc_uri())
+        assert ok is True, (ok, msg)
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
