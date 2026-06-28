@@ -59,7 +59,7 @@ auto-restarts and survives reboot — coming back on the same `.onion` and pubke
 Full setup — LND macaroon, `.env.host`, the systemd unit, inbound liquidity, and verification — is
 documented in the docs:
 
-📖 **[sailprotocol.com/docs](https://sailprotocol.com/docs/)**
+📖 **[the run-a-host guide](docs/sail-run-a-host-guide.md)**
 
 > **phoenixd hosts — the channel cliff.** A fresh phoenixd node can't *receive* until it has an
 > inbound channel, and it won't open one until an initial inbound payment exceeds the open cost
