@@ -104,6 +104,7 @@
         <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
           <input id="bolt11toggle" type="checkbox"> BOLT11 (any wallet)</label>
         <button id="send" class="primary">Send</button>
+        <button id="cancel" class="ghost" style="display:none">Cancel</button>
       </div>
     </div>
   </section>
@@ -113,7 +114,10 @@
 <script>
 let hosts = [], selected = null, busy = false;
 let walletConnected = false, payments = "mock";  // set by loadWallet(); drives auto pay-mode
+let inflight = null;  // AbortController for the in-flight inference (so Cancel can abort it)
 const $ = id => document.getElementById(id);
+const hostIsTor = pk => { const h = hosts.find(x => x.pubkey === pk); return !!(h && /\.onion(:\d+)?$/.test(h.endpoint || "")); };
+const ntokens = s => (s.trim() ? s.trim().split(/\s+/).length : 0);  // rough live token count
 const sat = msat => (msat / 1000).toFixed(0);
 const ago = ts => { const d = Math.max(0, Math.floor(Date.now()/1000 - ts));
   if (d < 60) return d + "s ago"; if (d < 3600) return Math.floor(d/60) + "m ago";
@@ -234,18 +238,38 @@ async function send() {
   if (busy || !selected) return;
   const prompt = $("prompt").value.trim();
   if (!prompt) return;
-  busy = true; $("send").disabled = true;
-  $("notice").textContent = "";
+  busy = true; $("send").disabled = true; $("cancel").style.display = "";
   // Auto-pick mode: NWC connected -> metered; else BOLT11. The toggle forces BOLT11.
   const mode = ($("bolt11toggle").checked || (payments === "nwc" && !walletConnected))
     ? "bolt11" : "metered";
-  $("status").innerHTML = `${aliasOf(selected)} · ` + (mode === "bolt11" ? "creating invoice…" : "paying & streaming…");
+
+  // live progress — so a 25–125s Tor inference shows movement, not dead air
+  const tor = hostIsTor(selected);
+  const t0 = Date.now();
+  let tokens = 0, spent = 0, lastBeat = Date.now(), finished = false;
+  const secs = () => Math.floor((Date.now() - t0) / 1000);
+  function paint() {
+    if (finished) return;  // a terminal handler set the final line; don't overwrite
+    if (tokens > 0) {
+      $("status").innerHTML = `${aliasOf(selected)} · streaming · <b>${tokens}</b> tok · <b>${sat(spent)}</b> sat · ${secs()}s`;
+    } else if (Date.now() - lastBeat > 12000) {
+      $("status").innerHTML = `${aliasOf(selected)} · still waiting… (first token can take 10–60s over Tor) · ${secs()}s`;
+    } else {
+      $("status").innerHTML = `${aliasOf(selected)} · ${tor ? "routing over Tor" : "contacting host"}… · ${secs()}s`;
+    }
+  }
+  $("notice").textContent = tor ? "Routing over Tor — the first token can take 10–60s. Silence here is normal." : "";
+  paint();
+  const ticker = setInterval(paint, 500);
+
   let buf = "";
   renderConversation(prompt, "", false);
+  inflight = new AbortController();
   try {
     const resp = await fetch("/api/infer", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ host_pubkey: selected, prompt, max_tokens: +$("maxtok").value || 64, mode }),
+      signal: inflight.signal,
     });
     const reader = resp.body.getReader(); const dec = new TextDecoder(); let acc = "";
     while (true) {
@@ -256,14 +280,17 @@ async function send() {
         const line = acc.slice(0, nl); acc = acc.slice(nl + 1);
         if (!line.trim()) continue;
         const ev = JSON.parse(line);
-        if (ev.type === "token") { buf += ev.text; renderConversation(prompt, buf, false); }
-        else if (ev.type === "invoice") { showInvoice(prompt, ev); }
-        else if (ev.type === "waiting") { $("status").innerHTML = "⏳ waiting for payment…"; }
+        if (ev.type === "token") { buf += ev.text; tokens = ntokens(buf); lastBeat = Date.now(); renderConversation(prompt, buf, false); }
+        else if (ev.type === "progress") { spent = ev.spent_msat; lastBeat = Date.now(); }
+        else if (ev.type === "invoice") { lastBeat = Date.now(); showInvoice(prompt, ev); }
+        else if (ev.type === "waiting") { lastBeat = Date.now(); $("status").innerHTML = "⏳ waiting for payment…"; }
         else if (ev.type === "failover") { selected = ev.to_pubkey; $("notice").textContent = `host unreachable — switching to ${ev.to_alias}…`; }
-        else if (ev.type === "done") { $("status").innerHTML = `done · ${aliasOf(selected)} · spent <b>${sat(ev.spent_msat)} sat</b> · ${(ev.latency_ms/1000).toFixed(1)}s`; }
+        else if (ev.type === "done") { finished = true; $("status").innerHTML = `done · ${aliasOf(selected)} · <b>${tokens}</b> tok · spent <b>${sat(ev.spent_msat)} sat</b> · ${(ev.latency_ms/1000).toFixed(1)}s`; }
         else if (ev.type === "error") {
+          finished = true;
           if (ev.kind === "unreachable") { $("notice").textContent = "Host unreachable — try another host or press Refresh."; $("status").textContent = ""; }
           else if (ev.kind === "expired") { $("notice").textContent = "Invoice expired — press Send to get a new one."; $("status").textContent = ""; }
+          else if (ev.kind === "payment_failed") { $("notice").textContent = "Payment failed — " + (ev.message || "") + " (host not penalized)"; $("status").textContent = ""; }
           else if (ev.kind === "serve_failed") {
             // host failed mid-stream AFTER payment: keep the partial output, show what was spent
             $("notice").textContent = "Host failed to serve (premature exit) — " + (ev.message || "");
@@ -274,10 +301,18 @@ async function send() {
       }
     }
   } catch (e) {
-    $("notice").textContent = "Connection problem — try another host or press Refresh.";
-    $("status").textContent = "";
+    finished = true;
+    if (e.name === "AbortError") {
+      // User cancelled — host reputation stays neutral (server treats the disconnect as non-fault).
+      $("notice").textContent = "Cancelled — stopped; no further chunks paid.";
+      $("status").innerHTML = `cancelled · <b>${tokens}</b> tok · spent <b>${sat(spent)} sat</b> · ${secs()}s`;
+    } else {
+      $("notice").textContent = "Connection problem — try another host or press Refresh.";
+      $("status").textContent = "";
+    }
   } finally {
-    busy = false; $("send").disabled = false;
+    clearInterval(ticker);
+    inflight = null; busy = false; $("send").disabled = false; $("cancel").style.display = "none";
     loadHosts(); loadHistory();  // reflect reputation + the new session
   }
 }
@@ -320,6 +355,7 @@ async function loadWallet() {
 
 $("refresh").onclick = loadHosts;
 $("send").onclick = send;
+$("cancel").onclick = () => { if (inflight) inflight.abort(); };  // abort the request -> server stops paying
 $("prompt").addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); });
 // Mobile drawer (UI chrome only — no app logic): toggle the hosts/history sidebar.
 $("drawertoggle").onclick = () => document.body.classList.toggle("drawer-open");

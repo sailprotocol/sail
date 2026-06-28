@@ -365,6 +365,8 @@ def run_inference(host, prompt: str, max_tokens: int = 64) -> Iterator[dict]:
                 text, _, meta = body.partition(NEXT_MARKER)
                 if text:
                     yield {"type": "token", "text": text}
+                # live progress: surface sats spent so far so the client isn't dead-air between chunks
+                yield {"type": "progress", "spent_msat": spent_msat}
                 ch = json.loads(meta)
                 continue
             if body:  # no trailer (shouldn't happen) -> stop
@@ -374,13 +376,19 @@ def run_inference(host, prompt: str, max_tokens: int = 64) -> Iterator[dict]:
         ok = True
         latency_ms = (time.monotonic() - t0) * 1000
         yield {"type": "done", "spent_msat": spent_msat, "latency_ms": round(latency_ms, 1)}
+    except (GeneratorExit, KeyboardInterrupt):
+        # User/client CANCELLED mid-stream (GUI Cancel aborts the request -> the server closes this
+        # generator; Ctrl-C on the CLI). That's the user's choice, NOT the host's fault — leave its
+        # reputation neutral. Closing here also means the pay loop stops: no further chunk is paid.
+        penalize = False
+        raise
     except httpx.TransportError as e:  # couldn't reach/keep the HOST (Tor/host down) — host-side
         yield {"type": "error", "kind": "unreachable", "message": str(e)}
     except Exception as e:  # noqa: BLE001 - a host-side serve/response failure
         yield {"type": "error", "kind": "other", "message": str(e)}
     finally:
         # Only HOST-fault outcomes reach record(): success, serve_failed, unreachable, bad response.
-        # Payment/config failures returned early with penalize=False (host untouched). A single
+        # Payment/config failures and user cancels set penalize=False (host untouched). A single
         # host failure won't hide the host (needs N consecutive within the cooldown — see reputation).
         if penalize:
             reputation.record(host.pubkey, success=ok, latency_ms=(latency_ms if ok else None))
