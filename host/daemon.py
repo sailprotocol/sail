@@ -57,7 +57,7 @@ PORT = int(os.getenv("PORT", "8001"))
 ENDPOINT = os.getenv("HOST_ENDPOINT", f"http://127.0.0.1:{PORT}")
 # Operator surface: a separate localhost-only listener (NEVER added to the Tor hidden service).
 OPERATOR_HOST = os.getenv("OPERATOR_HOST", "127.0.0.1")  # keep it loopback — do not bind 0.0.0.0
-OPERATOR_PORT = int(os.getenv("OPERATOR_PORT", "8081"))
+OPERATOR_PORT = int(os.getenv("OPERATOR_PORT", "8090"))
 PRICE_MSAT_PER_TOKEN = int(os.getenv("PRICE_MSAT_PER_TOKEN", "1000"))  # 1 sat/token (demo)
 TRANSPORT = os.getenv("TRANSPORT", "clearnet").lower()  # clearnet | tor
 CHUNK_TOKENS = max(1, int(os.getenv("CHUNK_TOKENS", "8")))  # metered settlement granularity
@@ -201,16 +201,24 @@ def _run_operator_app() -> None:
     """Serve the operator surface on a LOCALHOST-ONLY bind that is never added to the Tor hidden
     service — so the dashboard, wizard, and /api/wallet/* (seed, pay, close) + /api/setup/* are
     physically unreachable over the onion, not merely header-gated."""
+    import socket
     import uvicorn
+    # Pre-flight the bind: if the operator port is taken, uvicorn would just log a terse errno and
+    # let the thread die — say so clearly instead. Inference keeps serving regardless.
+    try:
+        probe = socket.socket()
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind((OPERATOR_HOST, OPERATOR_PORT))
+        probe.close()
+    except OSError as e:
+        print(f"[host] WARNING: operator surface can't bind {OPERATOR_HOST}:{OPERATOR_PORT} ({e}). "
+              f"Dashboard/wizard/wallet are unavailable — set OPERATOR_PORT to a free port and "
+              f"restart. (Inference is unaffected.)")
+        return
     cfg = uvicorn.Config(operator_app, host=OPERATOR_HOST, port=OPERATOR_PORT, log_level="warning")
     server = uvicorn.Server(cfg)
     server.install_signal_handlers = lambda: None  # we're not the main thread
-    try:
-        server.run()
-    except OSError as e:  # e.g. port already in use — surface it; the host keeps serving inference
-        print(f"[host] WARNING: operator surface could not bind {OPERATOR_HOST}:{OPERATOR_PORT} "
-              f"({e}). The dashboard/wizard/wallet won't be reachable — set OPERATOR_PORT to a free "
-              f"port and restart.")
+    server.run()
 
 
 def _maybe_start_operator() -> None:

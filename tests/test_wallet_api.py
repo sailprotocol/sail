@@ -454,6 +454,39 @@ def test_operator_app_has_wallet_and_setup_but_not_inference():
     assert "/v1/inference" not in op  # inference is not served on the operator port
 
 
+# ---- startup backstop: tighten seed perms on a phoenixd host --------------
+def _arm_startup(monkeypatch, d):
+    """Neutralize publish_listing's other side effects so we can assert just the perms backstop."""
+    monkeypatch.setattr(d, "_maybe_start_operator", lambda: None)
+    monkeypatch.setattr(d.moderation, "assert_can_serve", lambda m: None)
+    monkeypatch.setattr(d.registry, "publish", lambda listing: {"success": ["x"], "failed": {}})
+    monkeypatch.setattr(d, "TRANSPORT", "clearnet")
+    monkeypatch.setattr(d, "REANNOUNCE_SECONDS", 0)
+    monkeypatch.setenv("REGISTRY", "local")
+
+
+def test_startup_tightens_seed_perms_on_phoenixd_host(monkeypatch):
+    import host.daemon as d
+    from host import phoenixd_setup
+    called = []
+    monkeypatch.setattr(phoenixd_setup, "secure_seed_files", lambda: called.append(True) or {})
+    _arm_startup(monkeypatch, d)
+    monkeypatch.setenv("PAYMENTS", "phoenixd")
+    d.publish_listing()
+    assert called == [True], "phoenixd host must tighten ~/.phoenix perms on startup"
+
+
+def test_startup_skips_seed_perms_on_non_phoenixd_host(monkeypatch):
+    import host.daemon as d
+    from host import phoenixd_setup
+    called = []
+    monkeypatch.setattr(phoenixd_setup, "secure_seed_files", lambda: called.append(True) or {})
+    _arm_startup(monkeypatch, d)
+    monkeypatch.setenv("PAYMENTS", "mock")
+    d.publish_listing()
+    assert called == [], "non-phoenixd host has no phoenixd seed to tighten"
+
+
 if __name__ == "__main__":
     simple = [v for k, v in sorted(globals().items())
               if k.startswith("test_") and callable(v) and "monkeypatch" not in v.__code__.co_varnames]

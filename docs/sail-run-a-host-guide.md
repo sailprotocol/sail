@@ -201,13 +201,13 @@ ENV_FILE=.env.host PYTHONPATH=. .venv/bin/uvicorn host.daemon:app --port 8001
 ```
 
 A fresh host (mock payments) boots into the wizard. The operator surface (wizard, dashboard, and
-wallet) runs on a **separate localhost-only port (8081)** that is never added to the Tor hidden
+wallet) runs on a **separate localhost-only port (8090)** that is never added to the Tor hidden
 service — so it can't be reached over the `.onion`, only from this machine. Open it locally:
 
-**→ http://localhost:8081/setup**
+**→ http://localhost:8090/setup**
 
 > The `--port 8001` above is the **public inference** port the onion forwards to; the operator
-> surface comes up automatically on **8081** (set `OPERATOR_PORT` to change it).
+> surface comes up automatically on **8090** (set `OPERATOR_PORT` to change it).
 
 The wizard walks you through:
 
@@ -223,7 +223,7 @@ The wizard walks you through:
 
 > **Restarting the wizard.** The wizard *is* the daemon — to restart it, just re-run the `uvicorn`
 > command above (Ctrl-C to stop it first if it's still running), then reopen
-> `http://localhost:8081/setup`. Your progress is written to `.env.host` as you go, so a restart
+> `http://localhost:8090/setup`. Your progress is written to `.env.host` as you go, so a restart
 > picks up where you left off. **Note:** on startup the daemon creates its onion, so it won't come
 > up until Tor's control port is ready — if it exits immediately, re-check the
 > [Tor control-port verify step](#enable-tors-control-port-required) (`ss ... grep 9051`).
@@ -253,7 +253,7 @@ After "go live," the host runs as the `sail-host` systemd service.
 ```bash
 systemctl is-active sail-host                 # → active
 # wait for active, THEN check status (querying too early returns empty):
-curl -s http://127.0.0.1:8081/api/status | python3 -m json.tool   # operator port (8081), not the inference port
+curl -s http://127.0.0.1:8090/api/status | python3 -m json.tool   # operator port (8090), not the inference port
 ```
 
 In the status JSON, check:
