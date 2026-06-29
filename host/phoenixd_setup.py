@@ -20,10 +20,13 @@ import os
 import pathlib
 import platform
 import re
+import socket
 import stat
 import subprocess
+import tempfile
 import time
 import zipfile
+from urllib.parse import urlparse
 
 import httpx
 
@@ -113,25 +116,69 @@ def is_provisioned() -> bool:
 
 
 # --- first run --------------------------------------------------------------
+def _api_port() -> tuple[str, int]:
+    u = urlparse(os.getenv("PHOENIXD_API_URL", "http://127.0.0.1:9740"))
+    return (u.hostname or "127.0.0.1", u.port or 9740)
+
+
+def _port_in_use(host: str, port: int) -> bool:
+    """True if something is already listening on host:port (so we don't launch a second phoenixd
+    that would just fail to bind the API port and exit)."""
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
 def first_run(binary: pathlib.Path, timeout: float = 90.0) -> None:
     """Boot phoenixd once so it generates ~/.phoenix (seed + http-password), wait for those files,
     then stop this bootstrap process — the durable phoenixd.service takes over afterwards. No-op if
-    already provisioned."""
+    already provisioned.
+
+    On failure, surface the REAL reason: a fresh-user provisioning that "silently" produced no
+    ~/.phoenix was actually phoenixd exiting early (e.g. its API port already taken, or a runtime
+    error) with its output discarded. We pre-flight the port and capture phoenixd's output so the
+    wizard shows the cause instead of a bare exit code. The output is phoenixd's own startup log
+    (node id / errors) — the seed is written only to ~/.phoenix/seed.dat, never to stdout."""
     if is_provisioned():
         return
+    host, port = _api_port()
+    if _port_in_use(host, port):
+        raise RuntimeError(
+            f"phoenixd API port {host}:{port} is already in use — another phoenixd (or a process "
+            f"on that port) is running. Stop it before provisioning, or set PHOENIXD_API_URL.")
+
+    log = tempfile.NamedTemporaryFile(mode="w+", prefix="phoenixd-firstrun-", suffix=".log",
+                                      delete=False)
     proc = subprocess.Popen(
         [str(binary), "--agree-to-terms-of-service"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=log, stderr=subprocess.STDOUT,
     )
+
+    def _tail() -> str:
+        try:
+            log.flush()
+            text = pathlib.Path(log.name).read_text(errors="replace").strip()
+        except OSError:
+            return ""
+        return text[-500:].strip()
+
     try:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if is_provisioned():
                 return
             if proc.poll() is not None:
-                raise RuntimeError(f"phoenixd exited early (code {proc.returncode}) before generating a wallet")
+                why = _tail()
+                raise RuntimeError(
+                    f"phoenixd exited early (code {proc.returncode}) before generating a wallet"
+                    + (f": {why}" if why else " (no output captured)"))
             time.sleep(0.5)
-        raise TimeoutError(f"phoenixd did not generate ~/.phoenix within {timeout}s")
+        why = _tail()
+        raise TimeoutError(
+            f"phoenixd did not generate ~/.phoenix within {timeout}s"
+            + (f"; last output: {why}" if why else ""))
     finally:
         if proc.poll() is None:
             proc.terminate()
@@ -139,6 +186,11 @@ def first_run(binary: pathlib.Path, timeout: float = 90.0) -> None:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
+        log.close()
+        try:
+            os.unlink(log.name)
+        except OSError:
+            pass
 
 
 # --- systemd units (pure text; unit-tested) ---------------------------------
@@ -215,6 +267,13 @@ def provision(version: str | None = None) -> dict:
 
     binary = download_phoenixd(version)
     first_run(binary)
+    # Strict success contract: never return a seed (the wizard would run its back-up + verify
+    # ceremony on it) unless the wallet actually persisted on disk. Guards against showing the
+    # operator a recovery phrase for a node that was never created.
+    if not is_provisioned():
+        raise RuntimeError(
+            f"phoenixd provisioning incomplete — expected wallet files under {PHOENIX_DIR} "
+            f"(phoenix.conf + seed.dat) but they are missing")
     password = read_http_password()
     seed_words = read_seed_words()  # surfaced locally only; never written elsewhere
 
