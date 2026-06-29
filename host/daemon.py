@@ -126,6 +126,25 @@ def _issue_chunk_challenge(sid: str) -> dict:
 REANNOUNCE_SECONDS = int(os.getenv("LISTING_REANNOUNCE_SECONDS", "300"))
 
 
+def _live_to_serve() -> bool:
+    """True once a real payout backend is configured. A fresh host in the setup wizard runs with
+    PAYMENTS=mock and is NOT yet serving paid inference; go-live writes a real backend
+    (phoenixd/lnd/nwc) and restarts the daemon, at which point this flips true."""
+    return os.getenv("PAYMENTS", "mock").lower() != "mock"
+
+
+def _public_publish_withheld() -> str | None:
+    """Reason to withhold a PUBLIC-relay announce (else None to publish).
+
+    Don't leak a discoverable kind-38111 listing to public Nostr relays until the host is actually
+    live-to-serve — otherwise every aborted/half-finished/test wizard run litters discovery with
+    ghost hosts that can't serve. The LOCAL registry (dev/test) is never withheld."""
+    if os.getenv("REGISTRY", "local").lower() == "nostr" and not _live_to_serve():
+        return ("still in setup (PAYMENTS=mock) — not announcing to public relays yet; "
+                "complete go-live in the wizard to publish your listing")
+    return None
+
+
 def _build_listing() -> HostListing:
     return HostListing(
         pubkey=PUBKEY,
@@ -136,17 +155,22 @@ def _build_listing() -> HostListing:
 
 
 def _log_publish(result: dict, label: str) -> None:
-    """Surface the REAL per-relay outcome so a silent drop can't masquerade as success."""
+    """Surface the per-relay outcome. A PARTIAL publish (at least one relay accepted, others timed
+    out) is normal on public relays — lead with the success and present the stragglers as a soft
+    retry note, not a scary REJECTED. Only a publish where ZERO relays accepted is a real failure."""
     ok = result.get("success", []) if result else []
     failed = result.get("failed", {}) if result else {}
+    total = len(ok) + len(failed)
     if ok:
-        print(f"[host] {label}: accepted by {len(ok)} relay(s): {', '.join(ok)}")
-    if failed:
-        print(f"[host] {label}: REJECTED by {len(failed)} relay(s): "
-              + "; ".join(f"{r} -> {why}" for r, why in failed.items()))
-    if not ok:
-        print(f"[host] WARNING: {label}: NO relay accepted the listing — it won't be discoverable. "
-              f"Check outbound connectivity to the relays and this host's clock.")
+        print(f"[host] {label}: published to {len(ok)} of {total} relay(s): {', '.join(ok)}")
+        if failed:
+            detail = "; ".join(f"{r}: {why}" for r, why in failed.items())
+            print(f"[host] {label}: {len(failed)} of {total} relay(s) didn't accept this round "
+                  f"({detail}) — normal, will retry on the next heartbeat")
+    else:
+        detail = "; ".join(f"{r}: {why}" for r, why in failed.items()) if failed else "no relays configured"
+        print(f"[host] WARNING: {label}: NO relay accepted the listing — it won't be discoverable "
+              f"({detail}). Check outbound connectivity to the relays and this host's clock.")
 
 
 def _reannounce_loop(interval: int) -> None:
@@ -155,6 +179,8 @@ def _reannounce_loop(interval: int) -> None:
     time, so a heartbeat keeps the host discoverable instead of vanishing between client queries."""
     while True:
         time.sleep(interval)
+        if _public_publish_withheld():  # same gate as startup: never heartbeat a not-yet-live host
+            continue
         try:
             _log_publish(registry.publish(_build_listing()), f"re-announce ({alias_label(PUBKEY)})")
         except Exception as e:  # noqa: BLE001 — keep the host serving even if a relay hiccups
@@ -185,6 +211,12 @@ def publish_listing() -> None:
         # Expose the daemon as a .onion and advertise THAT as the endpoint.
         ENDPOINT = transport.setup_onion(PORT)
         print(f"[host] tor onion endpoint: {ENDPOINT}")
+    # F11: don't announce to PUBLIC relays until the host is live-to-serve (post go-live). A fresh
+    # host still in the wizard would otherwise leak a ghost listing that can't serve.
+    withheld = _public_publish_withheld()
+    if withheld:
+        print(f"[host] {withheld}")
+        return
     result = registry.publish(_build_listing())  # signed, PoW-mined, parameterized-replaceable
     print(f"[host] published listing: {alias_label(PUBKEY)} [{PUBKEY}] "
           f"serving {_model.name} @ {ENDPOINT}")
