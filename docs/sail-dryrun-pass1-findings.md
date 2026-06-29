@@ -17,6 +17,8 @@ fresh user all the way to a **live host**. The recruit-ready bar is met.
 - **F9** — `.env.example` real-operator defaults (TRANSPORT=tor, REGISTRY=nostr). Merged `d844bc0`.
 - **F10** — reboot footgun in the guide. Merged `6a620a9`.
 - **F12** — VRAM-aware model suggestion. Done via the install script.
+- **F11** — don't publish a discoverable listing until go-live succeeds. Merged `174cebb`. Gates the public-relay announce (startup + heartbeat) while the host is still in setup (`PAYMENTS=mock`); the local registry is never withheld, so dev/test keeps working.
+- **F14** — partial-relay-publish messaging. Merged `174cebb`. Reads as "published to N of M relay(s)" with stragglers a soft retry note; the scary warning fires only when ZERO relays accept.
 - **Install script** (`scripts/install-host.sh`) — automated host setup. Merged `91505b5`; verified end-to-end pass 3.
 - **Dual-method guide section** ("Two ways to set up"). Merged `19bcb8c`.
 
@@ -24,8 +26,6 @@ fresh user all the way to a **live host**. The recruit-ready bar is met.
 - **F4** — name the real failure cause in the wizard (port-in-use / Tor-not-ready / phoenixd-not-provisioned), not a bare "failed".
 - **F5** — daemon hard-crashes when Tor isn't ready; let it start and serve the wizard so the user can fix + retry.
 - **F8** — support links (Telegram + email) in the guide. Blocked on the Telegram handle.
-- **F11** — don't publish a discoverable listing until the host is live-to-serve (abandoned wizard runs leave ghost listings).
-- **F14** — partial-relay-publish messaging (surface when a listing reaches only some relays).
 
 ---
 
