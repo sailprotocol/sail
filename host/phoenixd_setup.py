@@ -277,6 +277,32 @@ def try_install_units(binary: pathlib.Path, deploy_dir: pathlib.Path | None = No
         return info
 
 
+# --- import an existing wallet ----------------------------------------------
+def import_seed(words: list[str], version: str | None = None) -> dict:
+    """Restore an EXISTING wallet from the operator's recovery phrase instead of generating one.
+
+    phoenixd's getOrGenerateSeed() reads ~/.phoenix/seed.dat if it exists (else generates), so we
+    write the mnemonic there FIRST — in phoenixd's own format (words joined by single spaces, which
+    its `[a-z]+` reader parses) — then run the normal provision flow, where phoenixd restores that
+    wallet. Caller MUST have validated the mnemonic (BIP39) already; phoenixd also validates on start.
+
+    Verifies phoenixd came up with the EXPECTED wallet (seed.dat still holds the imported words —
+    phoenixd does not regenerate when a seed file is present). Never logs the seed."""
+    if is_provisioned():
+        raise RuntimeError(
+            f"a phoenixd wallet already exists at {PHOENIX_DIR} — importing would not replace it; "
+            f"move/remove ~/.phoenix first if you really mean to restore a different seed")
+    PHOENIX_DIR.mkdir(parents=True, exist_ok=True)
+    SEED_FILE.write_text(" ".join(words))  # phoenixd seed.dat format: space-separated words
+    secure_seed_files()                    # 0600 before phoenixd (and anyone) can read it
+    result = provision(version)            # first_run finds seed.dat -> restores, doesn't generate
+    restored = read_seed_words()
+    if [w.lower() for w in restored] != [w.lower() for w in words]:
+        raise RuntimeError("phoenixd did not restore the provided seed — wallet mismatch after import")
+    result["imported"] = True
+    return result
+
+
 # --- orchestrator -----------------------------------------------------------
 def provision(version: str | None = None) -> dict:
     """Full phoenixd setup. Returns the seed words (for the LOCAL wizard to display once) plus the

@@ -63,6 +63,7 @@
   .wallet .balnum .u{font-size:1rem; color:var(--muted); font-weight:600; margin-left:5px;}
   .wallet .balsub{font-size:0.82rem; color:var(--muted); margin-top:6px;}
   .wallet .cliff{margin-top:14px; border:1px solid rgba(247,147,26,0.35); background:rgba(247,147,26,0.07); border-radius:9px; padding:12px 14px; font-size:0.88rem; color:var(--fg);} .wallet .cliff b{color:var(--beacon-2);}
+  .wallet .cliff.soft{border-color:var(--line); background:var(--ink-3);} .wallet .cliff.soft b{color:var(--fg);}
   .wallet .wactions{display:flex; gap:12px; margin-top:16px; padding-top:16px; border-top:1px solid var(--line); flex-wrap:wrap;}
   /* receive modal */
   .qrbox{background:#fff; border-radius:11px; padding:14px; display:flex; justify-content:center; margin:4px 0 14px;}
@@ -428,11 +429,17 @@ async function refreshWallet(payments){
     $('w-inbound').textContent = num(ch.inboundSat)+' sat';
     $('w-outbound').textContent = num(ch.outboundSat)+' sat';
     const cliff=$('w-cliff');
-    if(!ch.canReceive){
-      cliff.style.display='';
-      cliff.innerHTML = `<b>No inbound channel yet.</b> You need ~25–35k sat of inbound to receive payments. `
+    // Gate the "no channel yet" cliff on CHANNEL EXISTENCE, not inbound>0. A small first channel
+    // legitimately has little inbound headroom — that's a softer note, not the cliff.
+    if(!ch.hasChannel){
+      cliff.style.display=''; cliff.className='cliff';
+      cliff.innerHTML = `<b>No channel yet.</b> You need ~25–35k sat of inbound to receive payments. `
         + `phoenixd has no manual “open channel” step — use <b>Receive / fund</b> below to generate an `
         + `invoice; paying it (~25–35k+ sat) auto-opens your channel.`;
+    } else if(ch.inboundSat < 1000){
+      cliff.style.display=''; cliff.className='cliff soft';
+      cliff.innerHTML = `<b>Channel open.</b> Limited inbound (${num(ch.inboundSat)} sat) — a large incoming `
+        + `payment may trigger a new channel-open fee. Small payments are fine.`;
     } else cliff.style.display='none';
   }
 }

@@ -23,14 +23,6 @@ class WalletError(RuntimeError):
     """A phoenixd call failed. The message is operator-facing (local dashboard only)."""
 
 
-def _channel_state(c: dict) -> str:
-    """phoenixd reports channel state in 'type' as a fully-qualified lightning-kmp class name, e.g.
-    'fr.acinq.lightning.channel.states.Normal' (no bare 'state' field). Take the last dotted
-    component; fall back to a legacy 'state' field if a future build adds one."""
-    raw = c.get("type") or c.get("state") or ""
-    return str(raw).rsplit(".", 1)[-1] or "unknown"
-
-
 def _int(v) -> int:
     try:
         return int(v or 0)
@@ -52,22 +44,36 @@ class PhoenixdWallet:
         return {"balanceSat": _int(j.get("balanceSat")), "feeCreditSat": _int(j.get("feeCreditSat"))}
 
     def channels(self) -> dict:
-        """Channels with per-channel state + inbound/outbound liquidity, plus derived totals and a
-        canReceive flag (true when there's any inbound capacity to be paid into)."""
-        raw = self._get("/listchannels")
-        rows = raw if isinstance(raw, list) else []
-        out, inbound_total, outbound_total = [], 0, 0
+        """Channels with per-channel state + inbound/outbound liquidity, derived totals, and flags.
+
+        Read from /getinfo, NOT /listchannels: phoenixd's /listchannels returns the raw lightning-kmp
+        channel objects (no top-level balance fields — they read as 0). /getinfo returns the clean
+        per-channel view (ApiType.Channel): `state` (short, e.g. "Normal"), `balanceSat` =
+        availableBalanceForSend (OUTBOUND / can send — matches /getbalance), `inboundLiquiditySat` =
+        availableBalanceForReceive (INBOUND / can receive), `capacitySat`.
+
+        hasChannel = at least one open ("Normal") channel exists — gate the channel-cliff message on
+        THIS, not on inbound>0 (a small first channel legitimately has little inbound headroom)."""
+        info = self._get("/getinfo")
+        rows = info.get("channels") if isinstance(info, dict) else None
+        rows = rows if isinstance(rows, list) else []
+        out, inbound_total, outbound_total, normal = [], 0, 0, 0
         for c in rows:
             if not isinstance(c, dict):
                 continue
+            state = str(c.get("state") or "unknown")
             inbound = _int(c.get("inboundLiquiditySat"))
-            outbound = _int(c.get("balanceSat"))  # phoenixd: local balance = what you can send
+            outbound = _int(c.get("balanceSat"))
             inbound_total += inbound
             outbound_total += outbound
-            out.append({"channelId": c.get("channelId"), "state": _channel_state(c),
-                        "inboundSat": inbound, "outboundSat": outbound})
-        return {"channels": out, "count": len(out), "inboundSat": inbound_total,
-                "outboundSat": outbound_total, "canReceive": inbound_total > 0}
+            if state == "Normal":
+                normal += 1
+            out.append({"channelId": c.get("channelId"), "state": state,
+                        "inboundSat": inbound, "outboundSat": outbound,
+                        "capacitySat": _int(c.get("capacitySat"))})
+        return {"channels": out, "count": len(out), "normalCount": normal,
+                "inboundSat": inbound_total, "outboundSat": outbound_total,
+                "hasChannel": normal > 0, "canReceive": inbound_total > 0}
 
     # --- receive (fund / first-payment to auto-open the channel) -------------
     def receive(self, amount_sat: int | None = None, description: str | None = None) -> dict:

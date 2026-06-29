@@ -152,6 +152,18 @@
     </label>
 
     <!-- per-tier config, revealed for the selected rail -->
+    <div class="paycfg" id="cfg-phoenixd">
+      <label class="opt sel" data-ph="generate"><input type="radio" name="phmode" checked><span class="dot"></span>
+        <span class="opt-head"><span class="name">Create a new wallet</span></span>
+        <span class="meta">We generate a fresh wallet and show you the recovery phrase to back up next.</span></label>
+      <label class="opt" data-ph="import"><input type="radio" name="phmode"><span class="dot"></span>
+        <span class="opt-head"><span class="name">Import an existing seed</span></span>
+        <span class="meta">Restore a phoenixd wallet from a 12-word recovery phrase you already hold.</span></label>
+      <div id="ph-import" style="display:none">
+        <div class="field"><label>Recovery phrase — 12 words, space-separated</label><div class="input"><textarea id="ph-seed" rows="3" spellcheck="false" autocomplete="off" placeholder="word1 word2 … word12"></textarea></div></div>
+        <div class="note bad">This <b>replaces any existing wallet</b> on this host. Entered locally only — never sent over Tor, never logged.</div>
+      </div>
+    </div>
     <div class="paycfg" id="cfg-lnd" style="display:none">
       <div class="field"><label>REST host</label><div class="input"><input id="lnd-rest" placeholder="https://your-node:8080" spellcheck="false"></div></div>
       <div class="field"><label>TLS certificate path</label><div class="input"><input id="lnd-cert" placeholder="~/.config/sail/lnd/tls.cert" spellcheck="false"></div></div>
@@ -224,9 +236,12 @@ const RAIL=[['detect','Detect'],['model','Model'],['pricing','Pricing'],['payout
 let idx=0, detectDone=false, payout={tier:'phoenixd'}, seedWords=null, seedVerified=false, vpos=[0,0];
 
 function payTier(){ return document.querySelector('.opt[data-pay].sel')?.dataset.pay || 'phoenixd'; }
+function phMode(){ return document.querySelector('.opt[data-ph].sel')?.dataset.ph || 'generate'; }
 function steps(){
   const base=['detect','model','pricing','payout'];
-  if(payTier()==='phoenixd') base.push('seed');
+  // The backup/verify-seed ceremony is only for a NEWLY generated phoenixd wallet; an imported
+  // wallet's owner already has the phrase, so skip it.
+  if(payTier()==='phoenixd' && phMode()!=='import') base.push('seed');
   base.push('live'); return base;
 }
 const panels=[...document.querySelectorAll('.panel')];
@@ -260,7 +275,7 @@ function validate(){
     const t=payTier();
     if(t==='lnd') ok = !!($('lnd-rest').value.trim() && $('lnd-cert').value.trim() && $('lnd-mac').value.trim());
     else if(t==='nwc') ok = !!$('nwc-uri').value.trim();
-    else ok = true;  // phoenixd
+    else ok = phMode()!=='import' || !!$('ph-seed').value.trim();  // phoenixd: import needs a phrase
   }
   if(cur==='seed') ok=seedVerified;
   nextBtn.disabled=!ok;
@@ -351,6 +366,7 @@ const PAYNOTE={
 };
 function renderPayCfg(){
   const t=payTier();
+  $('cfg-phoenixd').style.display = t==='phoenixd' ? 'block':'none';
   $('cfg-lnd').style.display = t==='lnd' ? 'block':'none';
   $('cfg-nwc').style.display = t==='nwc' ? 'block':'none';
   $('payoutnote').className='note'; $('payoutnote').textContent = PAYNOTE[t]||'';
@@ -359,14 +375,29 @@ document.querySelectorAll('.opt[data-pay]').forEach(o=>o.addEventListener('chang
   document.querySelectorAll('.opt[data-pay]').forEach(x=>x.classList.toggle('sel', x.querySelector('input').checked));
   renderPayCfg(); show();
 }));
-['lnd-rest','lnd-cert','lnd-mac','nwc-uri'].forEach(id=>$(id).addEventListener('input',validate));
+// phoenixd: new-wallet vs import-seed sub-choice
+document.querySelectorAll('.opt[data-ph]').forEach(o=>o.addEventListener('change',()=>{
+  document.querySelectorAll('.opt[data-ph]').forEach(x=>x.classList.toggle('sel', x.querySelector('input').checked));
+  $('ph-import').style.display = phMode()==='import' ? 'block':'none';
+  show();  // steps() changes (import skips the seed-backup step)
+}));
+['lnd-rest','lnd-cert','lnd-mac','nwc-uri','ph-seed'].forEach(id=>$(id).addEventListener('input',validate));
 
 async function setupPayout(){
   const t=payTier();
   if(t==='phoenixd'){
+    if(phMode()==='import'){
+      const seed=$('ph-seed').value.trim();
+      nextBtn.disabled=true; nextBtn.textContent='Importing…';
+      $('payoutnote').innerHTML='<span class="spinner"></span> Restoring your wallet & starting phoenixd… (first run can take a moment)';
+      const r=await api('/api/setup/payout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tier:'phoenixd', mode:'import', seed})});
+      $('ph-seed').value='';  // clear the entered phrase from the DOM after sending
+      if(r.error){ $('payoutnote').className='note bad'; $('payoutnote').textContent='Import failed: '+r.error; nextBtn.textContent='Retry'; nextBtn.disabled=false; return false; }
+      $('payoutnote').className='note'; $('payoutnote').textContent='Wallet restored.'; return true;  // no backup ceremony — operator already holds the seed
+    }
     nextBtn.disabled=true; nextBtn.textContent='Setting up node…';
     $('payoutnote').innerHTML='<span class="spinner"></span> Downloading & starting phoenixd, generating your wallet… (first run can take a moment)';
-    const r=await api('/api/setup/payout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tier:'phoenixd'})});
+    const r=await api('/api/setup/payout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tier:'phoenixd', mode:'generate'})});
     if(r.error){ $('payoutnote').className='note bad'; $('payoutnote').textContent='Setup failed: '+r.error; nextBtn.textContent='Retry'; nextBtn.disabled=false; return false; }
     seedWords=r.seed_words; fillSeed(seedWords); return true;
   }

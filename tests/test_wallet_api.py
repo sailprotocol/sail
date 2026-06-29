@@ -87,39 +87,52 @@ def test_balance_http_error_surfaces_status():
 
 
 # ---- PhoenixdWallet.channels + canReceive ---------------------------------
-def test_channels_canreceive_true_with_inbound():
-    w = _wallet({"/listchannels": FakeResp(payload=[
-        {"channelId": "abc", "type": "fr.acinq.lightning.channel.states.Normal",
-         "balanceSat": 5000, "inboundLiquiditySat": 30000},
-    ])})
+def _getinfo(channels):
+    # channels() reads /getinfo (the clean ApiType.Channel view), NOT /listchannels (raw objects)
+    return {"/getinfo": FakeResp(payload={"nodeId": "n", "channels": channels})}
+
+
+def test_channels_maps_balance_to_outbound_inbound():
+    # balanceSat = availableBalanceForSend (outbound/can-send); inboundLiquiditySat = can-receive
+    w = _wallet(_getinfo([
+        {"channelId": "abc", "state": "Normal", "balanceSat": 6261,
+         "inboundLiquiditySat": 30000, "capacitySat": 40000},
+    ]))
     out = w.channels()
-    assert out["count"] == 1
+    assert out["count"] == 1 and out["normalCount"] == 1 and out["hasChannel"] is True
+    assert out["outboundSat"] == 6261 and out["inboundSat"] == 30000  # consistent w/ spendable
     assert out["canReceive"] is True
-    assert out["inboundSat"] == 30000 and out["outboundSat"] == 5000
-    assert out["channels"][0]["state"] == "Normal"  # last dotted component
-    assert out["channels"][0]["channelId"] == "abc"
+    assert out["channels"][0]["state"] == "Normal" and out["channels"][0]["channelId"] == "abc"
 
 
-def test_channels_canreceive_false_without_inbound():
-    w = _wallet({"/listchannels": FakeResp(payload=[
-        {"channelId": "x", "type": "...states.Normal", "balanceSat": 9000, "inboundLiquiditySat": 0},
-    ])})
+def test_channels_open_but_no_inbound_haschannel_true_canreceive_false():
+    # the reported bug scenario: spendable balance present, 0 inbound — a channel DOES exist
+    w = _wallet(_getinfo([
+        {"channelId": "x", "state": "Normal", "balanceSat": 6261, "inboundLiquiditySat": 0},
+    ]))
     out = w.channels()
+    assert out["hasChannel"] is True, "an open channel must register as existing"
     assert out["canReceive"] is False and out["inboundSat"] == 0
+    assert out["outboundSat"] == 6261  # NOT 0 — the mapping bug is fixed
 
 
 def test_channels_empty_means_no_channel():
-    w = _wallet({"/listchannels": FakeResp(payload=[])})
-    out = w.channels()
-    assert out == {"channels": [], "count": 0, "inboundSat": 0, "outboundSat": 0, "canReceive": False}
+    out = _wallet(_getinfo([])).channels()
+    assert out["count"] == 0 and out["hasChannel"] is False and out["canReceive"] is False
+    assert out["inboundSat"] == 0 and out["outboundSat"] == 0
+
+
+def test_channels_non_normal_state_is_not_a_usable_channel():
+    # e.g. an offline/opening channel exists in the list but isn't usable -> hasChannel False
+    out = _wallet(_getinfo([{"channelId": "y", "state": "Offline", "balanceSat": 0}])).channels()
+    assert out["count"] == 1 and out["normalCount"] == 0 and out["hasChannel"] is False
 
 
 def test_channels_totals_sum_across_channels():
-    w = _wallet({"/listchannels": FakeResp(payload=[
-        {"channelId": "a", "type": "x.Normal", "balanceSat": 1000, "inboundLiquiditySat": 2000},
-        {"channelId": "b", "type": "x.Normal", "balanceSat": 3000, "inboundLiquiditySat": 4000},
-    ])})
-    out = w.channels()
+    out = _wallet(_getinfo([
+        {"channelId": "a", "state": "Normal", "balanceSat": 1000, "inboundLiquiditySat": 2000},
+        {"channelId": "b", "state": "Normal", "balanceSat": 3000, "inboundLiquiditySat": 4000},
+    ])).channels()
     assert out["outboundSat"] == 4000 and out["inboundSat"] == 6000 and out["count"] == 2
 
 
@@ -173,10 +186,11 @@ def test_endpoint_channels_ok(monkeypatch):
     c, d = _client()
     _set(monkeypatch, "phoenixd")
     monkeypatch.setattr(d, "_wallet_or_error",
-                        lambda req: (_wallet({"/listchannels": FakeResp(payload=[
-                            {"channelId": "z", "type": "x.Normal", "balanceSat": 100, "inboundLiquiditySat": 200}])}), None))
+                        lambda req: (_wallet(_getinfo([
+                            {"channelId": "z", "state": "Normal", "balanceSat": 100, "inboundLiquiditySat": 200}])), None))
     r = c.get("/api/wallet/channels")
-    assert r.status_code == 200 and r.json()["canReceive"] is True, r.text
+    j = r.json()
+    assert r.status_code == 200 and j["canReceive"] is True and j["hasChannel"] is True, r.text
 
 
 # ---- PhoenixdWallet.receive ----------------------------------------------
@@ -372,9 +386,10 @@ def test_endpoint_pay_surfaces_failure_502(monkeypatch):
 
 # ---- close endpoint -------------------------------------------------------
 def _close_wallet():
+    # the close endpoint derives channel ids via channels() (-> /getinfo), then closes each
     return _wallet({
-        "/listchannels": FakeResp(payload=[{"channelId": "c1", "type": "x.Normal",
-                                             "balanceSat": 1000, "inboundLiquiditySat": 0}]),
+        "/getinfo": FakeResp(payload={"channels": [
+            {"channelId": "c1", "state": "Normal", "balanceSat": 1000, "inboundLiquiditySat": 0}]}),
         "/closechannel": FakeResp(payload={"txId": "sweeptx"}),
     })
 
@@ -407,7 +422,7 @@ def test_endpoint_close_no_channel_is_400(monkeypatch):
     c, d = _client()
     _set(monkeypatch, "phoenixd")
     monkeypatch.setattr(d, "_wallet_or_error",
-                        lambda req: (_wallet({"/listchannels": FakeResp(payload=[])}), None))
+                        lambda req: (_wallet(_getinfo([])), None))
     r = c.post("/api/wallet/close", json={"address": "bc1qxyz", "feerateSatByte": 2})
     assert r.status_code == 400 and "no channel" in r.json()["error"].lower(), r.text
 
@@ -428,6 +443,49 @@ def test_endpoint_incoming_reports_paid(monkeypatch):
                         lambda req: (_wallet({"/payments/incoming/HH": FakeResp(payload={"isPaid": True, "receivedSat": 30000})}), None))
     r = c.get("/api/wallet/incoming/HH")
     assert r.status_code == 200 and r.json() == {"paid": True, "receivedSat": 30000}, r.text
+
+
+# ---- setup payout: import-existing-seed branch ----------------------------
+_VALID12 = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+
+
+def _setup_client():
+    from fastapi.testclient import TestClient
+    import host.daemon as d
+    return TestClient(d.operator_app), d  # /api/setup/* is on the operator app
+
+
+def test_payout_import_rejects_invalid_seed(monkeypatch):
+    c, _ = _setup_client()
+    monkeypatch.setenv("PAYMENTS", "mock")
+    r = c.post("/api/setup/payout", json={"tier": "phoenixd", "mode": "import", "seed": "not a real seed"})
+    assert r.status_code == 400, r.text  # BIP39 validation fails before touching anything
+
+
+def test_payout_import_success_returns_imported_no_seed_ceremony(monkeypatch):
+    c, d = _setup_client()
+    monkeypatch.setenv("PAYMENTS", "mock")
+    from host import config_writer, phoenixd_setup
+    monkeypatch.setattr(config_writer, "update_env_file", lambda *a, **k: None)
+    monkeypatch.setattr(phoenixd_setup, "import_seed",
+                        lambda words: {"imported": True, "service": {"installed": False}})
+    r = c.post("/api/setup/payout", json={"tier": "phoenixd", "mode": "import", "seed": _VALID12})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["imported"] is True and body["tier"] == "phoenixd"
+    assert "seed_words" not in body  # imported wallet: operator already holds the phrase, no ceremony
+
+
+def test_payout_generate_still_returns_seed_for_ceremony(monkeypatch):
+    c, d = _setup_client()
+    monkeypatch.setenv("PAYMENTS", "mock")
+    from host import config_writer, phoenixd_setup
+    seed = ["abandon"] * 12
+    monkeypatch.setattr(config_writer, "update_env_file", lambda *a, **k: None)
+    monkeypatch.setattr(phoenixd_setup, "provision",
+                        lambda: {"seed_words": seed, "service": {"installed": False}})
+    r = c.post("/api/setup/payout", json={"tier": "phoenixd", "mode": "generate"})
+    assert r.status_code == 200 and r.json()["seed_words"] == seed, r.text
 
 
 # ---- physical separation: onion app must NOT mount operator routes --------

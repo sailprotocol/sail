@@ -129,6 +129,60 @@ def test_secure_seed_files_tightens_perms(tmp_path, monkeypatch):
     assert (d.stat().st_mode & 0o777) == 0o700, oct(d.stat().st_mode)
 
 
+# ---- import an existing seed -----------------------------------------------
+def test_import_seed_writes_seedfile_and_restores(tmp_path, monkeypatch):
+    d = tmp_path / ".phoenix"
+    seed = d / "seed.dat"
+    conf = d / "phoenix.conf"
+    monkeypatch.setattr(ps, "PHOENIX_DIR", d)
+    monkeypatch.setattr(ps, "SEED_FILE", seed)
+    monkeypatch.setattr(ps, "CONF_FILE", conf)
+    monkeypatch.setattr(ps, "is_provisioned", lambda: False)  # no wallet yet
+    words = ["abandon"] * 11 + ["about"]
+
+    captured = {}
+
+    def fake_provision(version=None):
+        # phoenixd would read the seed.dat we wrote and "restore" — simulate by asserting it exists
+        captured["seed_on_disk"] = seed.read_text()
+        captured["mode"] = (seed.stat().st_mode & 0o777)
+        return {"provisioned": True, "seed_words": words, "service": {"installed": False}}
+
+    monkeypatch.setattr(ps, "provision", fake_provision)
+    monkeypatch.setattr(ps, "read_seed_words", lambda: words)  # restore verification reads it back
+
+    result = ps.import_seed(words)
+    assert result["imported"] is True
+    assert captured["seed_on_disk"] == "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+    assert captured["mode"] == 0o600, oct(captured["mode"])  # secured before provision
+
+
+def test_import_seed_refuses_when_wallet_exists(monkeypatch):
+    monkeypatch.setattr(ps, "is_provisioned", lambda: True)
+    try:
+        ps.import_seed(["abandon"] * 11 + ["about"])
+    except RuntimeError as e:
+        assert "already exists" in str(e)
+    else:
+        raise AssertionError("import must refuse to clobber an existing wallet")
+
+
+def test_import_seed_detects_restore_mismatch(tmp_path, monkeypatch):
+    d = tmp_path / ".phoenix"
+    monkeypatch.setattr(ps, "PHOENIX_DIR", d)
+    monkeypatch.setattr(ps, "SEED_FILE", d / "seed.dat")
+    monkeypatch.setattr(ps, "CONF_FILE", d / "phoenix.conf")
+    monkeypatch.setattr(ps, "is_provisioned", lambda: False)
+    monkeypatch.setattr(ps, "provision", lambda version=None: {"service": {}})
+    monkeypatch.setattr(ps, "read_seed_words", lambda: ["zoo"] * 12)  # phoenixd came up with a DIFFERENT wallet
+    try:
+        ps.import_seed(["abandon"] * 11 + ["about"])
+    except RuntimeError as e:
+        assert "mismatch" in str(e).lower()
+    else:
+        raise AssertionError("import must detect a wallet mismatch after restore")
+
+
 # ---- endpoint: failure surfaces an error and gates the seed step -----------
 def _client():
     from fastapi.testclient import TestClient

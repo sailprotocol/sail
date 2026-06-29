@@ -951,9 +951,25 @@ async def setup_payout(request: Request):
             return JSONResponse({"error": detail, "capable": False}, status_code=400)
 
     if tier == "phoenixd":
+        from host import phoenixd_setup
+        mode = (body.get("mode") or "generate").lower()
+        if mode == "import":
+            # Restore an existing wallet from the operator's recovery phrase (local operator port
+            # only — already gated; never the onion). Validate BIP39 before touching seed.dat; never
+            # log the phrase. The operator already has the seed, so NO backup ceremony is returned.
+            from shared import bip39
+            ok, reason = bip39.validate_mnemonic(body.get("seed") or "")
+            if not ok:
+                return JSONResponse({"error": reason}, status_code=400)
+            words = bip39.normalize(body.get("seed") or "")
+            try:
+                config_writer.update_env_file(updates)
+                result = phoenixd_setup.import_seed(words)
+            except Exception as e:  # noqa: BLE001 — surface import failure to the wizard
+                return JSONResponse({"error": str(e)[:300]}, status_code=500)
+            return {"ok": True, "tier": tier, "imported": True, "service": result["service"]}
         try:
             config_writer.update_env_file(updates)
-            from host import phoenixd_setup
             result = phoenixd_setup.provision()  # downloads + first-runs phoenixd; writes the password
         except Exception as e:  # noqa: BLE001 — surface provisioning failure to the wizard
             return JSONResponse({"error": str(e)[:300]}, status_code=500)
