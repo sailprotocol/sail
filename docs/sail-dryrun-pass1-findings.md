@@ -1,5 +1,34 @@
 # SAIL — dry-run pass 1 findings
 
+## STATUS (updated)
+
+Pass 1's punch-list is largely cleared. The original findings are preserved below for the record;
+this section is the current state.
+
+**Milestones:** **pass 2** (manual path) and **pass 3** (install script) each got a doc-only
+fresh user all the way to a **live host**. The recruit-ready bar is met.
+
+**Resolved & verified on hardware:**
+- **F1** — Tor control-port guide rewrite (dedup-safe + verify). Merged `9cf9161`; verified pass 2 & 3.
+- **F2** — go-live rendered the wrong user/workdir. Merged; verified (fresh identities published).
+- **F3** — phoenixd silent provisioning failure + seed-ceremony gating. Merged; verified.
+- **F3b** — scrubbed personal/regtest paths from the public `.env.example`. Merged `0ae7feb`.
+- **F6, F7** — GPU "no device detected" note + restart-the-wizard note. Merged in the F1 commit.
+- **F9** — `.env.example` real-operator defaults (TRANSPORT=tor, REGISTRY=nostr). Merged `d844bc0`.
+- **F10** — reboot footgun in the guide. Merged `6a620a9`.
+- **F12** — VRAM-aware model suggestion. Done via the install script.
+- **Install script** (`scripts/install-host.sh`) — automated host setup. Merged `91505b5`; verified end-to-end pass 3.
+- **Dual-method guide section** ("Two ways to set up"). Merged `19bcb8c`.
+
+**Remaining (polish, non-blocking — pass 2 & 3 did not hit these):**
+- **F4** — name the real failure cause in the wizard (port-in-use / Tor-not-ready / phoenixd-not-provisioned), not a bare "failed".
+- **F5** — daemon hard-crashes when Tor isn't ready; let it start and serve the wizard so the user can fix + retry.
+- **F8** — support links (Telegram + email) in the guide. Blocked on the Telegram handle.
+- **F11** — don't publish a discoverable listing until the host is live-to-serve (abandoned wizard runs leave ghost listings).
+- **F14** — partial-relay-publish messaging (surface when a listing reaches only some relays).
+
+---
+
 Standing up a host as a **fresh, doc-only `sailtest` user** on a clean profile (NucBox),
 following only the README + `docs/sail-run-a-host-guide.md`. The goal was a snag-free
 start-to-finish host setup; we did not reach it, and every snag below is a gap a real
