@@ -11,6 +11,33 @@ Nostr. This guide takes you from a fresh Ubuntu box to a live, earning host.
 
 ---
 
+## Two ways to set up
+
+**Fastest — the install script.** It automates all the system prep below (GPU check, Ollama,
+Tor control port, repo/venv/deps, model selection) and hands you off to the setup wizard. It's
+meant to be **downloaded and read before you run it** — not piped blindly into a shell.
+
+```bash
+# download it:
+curl -fsSL https://raw.githubusercontent.com/sailprotocol/sail/master/scripts/install-host.sh -o install-host.sh
+# READ it (recommended — it runs sudo for driver/packages/Tor):
+less install-host.sh
+# run it:
+chmod +x install-host.sh
+./install-host.sh
+```
+
+It prints a plan and asks you to confirm before doing anything, uses sudo only where needed,
+never reboots for you, and is safe to re-run. When it finishes it prints the command to start
+your host and the wizard URL. **One thing it can't do for you:** after it adds you to the
+`debian-tor` group, you must **log out and back in** before starting the host (the guide
+explains why under the Tor section).
+
+**By hand — the manual steps below.** Prefer to understand/audit each step, or not run a
+script? Follow the rest of this guide; it's the exact sequence the script automates.
+
+---
+
 ## What you'll need
 
 - **Linux x86_64** (Ubuntu 22.04/24.04 tested). macOS/Windows not yet supported for hosting.
