@@ -1,10 +1,11 @@
 """
 Go-live unit rendering (dry-run finding F2).
 
-A fresh operator (`sailtest` in /home/sailtest/sail) saw the go-live screen print rob's path
-(`sudo cp /home/rob/dev/sail/deploy/sail-host.service ...`) and the unit was never written for
-their user. Root cause: the rendered `User=` came from $USER (which carries the invoking user
-under sudo/su), and nothing pinned workdir/uvicorn to the running process.
+A fresh operator (`sailtest` in /home/sailtest/sail) saw the go-live screen print a different
+user's hardcoded path (`sudo cp /home/<other-user>/sail/deploy/sail-host.service ...`) and the
+unit was never written for their own user. Root cause: the rendered `User=` came from $USER
+(which carries the invoking user under sudo/su), and nothing pinned workdir/uvicorn to the
+running process.
 
 These tests pin the contract: the rendered unit + the displayed install commands must use the
 RUNNING process's user/workdir/venv — never a baked-in or $USER-derived value — and the unit
@@ -100,7 +101,7 @@ def test_install_writes_unit_before_showing_cp_and_uses_running_identity(tmp_pat
     assert f"WorkingDirectory={service_setup.repo_root()}" in body
 
     assert res["install_required"] is True
-    # The displayed cp command references the file we actually wrote (no /home/rob/... baked path).
+    # The displayed cp command references the file we actually wrote (no foreign baked-in path).
     cp = next(c for c in res["commands"] if c.startswith("sudo cp "))
     assert str(unit_path) in cp
     assert res["unit"] == str(unit_path)
