@@ -57,6 +57,12 @@
   .typefield input{width:100%; background:var(--code-bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:var(--fg); font-family:'IBM Plex Mono',monospace; font-size:0.88rem;} .typefield input:focus{outline:none; border-color:var(--danger);}
   .cmd{background:var(--code-bg); border:1px solid var(--line); border-radius:9px; padding:12px 14px; margin-bottom:8px; display:flex; align-items:center; gap:10px;}
   .cmd code{flex:1; font-family:'IBM Plex Mono',monospace; font-size:0.82rem; color:var(--beacon-2); overflow-x:auto; white-space:nowrap;}
+  /* wallet */
+  .wallet .wtop{display:flex; align-items:baseline; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--line);}
+  .wallet .balnum{font-family:'Bricolage Grotesque'; font-weight:800; font-size:2.4rem; line-height:1; color:var(--beacon);}
+  .wallet .balnum .u{font-size:1rem; color:var(--muted); font-weight:600; margin-left:5px;}
+  .wallet .balsub{font-size:0.82rem; color:var(--muted); margin-top:6px;}
+  .wallet .cliff{margin-top:14px; border:1px solid rgba(247,147,26,0.35); background:rgba(247,147,26,0.07); border-radius:9px; padding:12px 14px; font-size:0.88rem; color:var(--fg);} .wallet .cliff b{color:var(--beacon-2);}
 </style>
 </head>
 <body>
@@ -105,6 +111,20 @@
     <div class="metric"><div class="n" id="m-tokens">—</div><div class="l">Tokens today</div></div>
     <div class="metric"><div class="n" id="m-sats">—</div><div class="l">Earned today</div></div>
     <div class="metric"><div class="n" id="m-uptime">—</div><div class="l">Uptime</div></div>
+  </div>
+
+  <div class="card wallet" id="walletcard" style="display:none;">
+    <div class="wtop">
+      <div>
+        <div class="balnum"><span id="w-balance">—</span><span class="u">sat</span></div>
+        <div class="balsub" id="w-balsub">spendable Lightning balance</div>
+      </div>
+      <span class="pill" id="w-rail">phoenixd</span>
+    </div>
+    <div class="kv"><span class="key">Channel</span><span class="val" id="w-chan">—</span></div>
+    <div class="kv"><span class="key">Inbound · can receive</span><span class="val mono" id="w-inbound">—</span></div>
+    <div class="kv"><span class="key">Outbound · can send</span><span class="val mono" id="w-outbound">—</span></div>
+    <div class="cliff" id="w-cliff" style="display:none;"></div>
   </div>
 
   <div class="grid2">
@@ -298,6 +318,37 @@ async function refresh(){
     return `<div class="row"><span class="who">anon · ${a.tag}…</span><span class="mono">${a.model}</span><span class="hidesm mono">${num(a.tokens)}</span><span class="hidesm mono">${num(sat(a.msat))}</span><span>${badge}</span></div>`;
   }).join('') || '<div class="row"><span class="who muted">no activity yet</span></div>';
   $('activity').innerHTML = rows;
+  refreshWallet(d.payments);
+}
+
+// ---- wallet (phoenixd only) ----
+async function refreshWallet(payments){
+  const card=$('walletcard');
+  if(payments!=='phoenixd'){ card.style.display='none'; return; }
+  card.style.display='';
+  let bal=null, ch=null;
+  try{ bal = await (await fetch('/api/wallet/balance')).json(); }catch{}
+  try{ ch  = await (await fetch('/api/wallet/channels')).json(); }catch{}
+  if(bal && !bal.error){
+    $('w-balance').textContent = num(bal.balanceSat);
+    const credit = bal.feeCreditSat||0;
+    $('w-balsub').textContent = credit>0
+      ? `spendable · +${num(credit)} sat fee credit (held until a channel opens)`
+      : 'spendable Lightning balance';
+  } else if(bal && bal.error){ $('w-balsub').textContent = bal.error; }
+  if(ch && !ch.error){
+    const c0 = (ch.channels&&ch.channels[0])||{};
+    $('w-chan').innerHTML = ch.count>0 ? `${ch.count} · <span class="mono">${c0.state||'—'}</span>` : 'none yet';
+    $('w-inbound').textContent = num(ch.inboundSat)+' sat';
+    $('w-outbound').textContent = num(ch.outboundSat)+' sat';
+    const cliff=$('w-cliff');
+    if(!ch.canReceive){
+      cliff.style.display='';
+      cliff.innerHTML = `<b>No inbound channel yet.</b> You need ~25–35k sat of inbound to receive payments. `
+        + `phoenixd has no manual “open channel” step — receiving your first payment auto-opens it `
+        + `(the Receive button lands in the next update).`;
+    } else cliff.style.display='none';
+  }
 }
 
 $('copyonion').onclick = ()=>{ navigator.clipboard?.writeText($('copyonion').dataset.c||''); const b=$('copyonion'); b.textContent='copied'; setTimeout(()=>b.textContent='copy',1200); };

@@ -569,6 +569,45 @@ def api_selftest(request: Request):
         return {"ok": False, "via": via, "error": str(e)[:140]}
 
 
+# --- host wallet (LOCAL ONLY — moves money) ---------------------------------
+# Wraps phoenixd's HTTP API so the operator can see + move sats from the dashboard instead of
+# terminal phoenixd commands. These move money, so they share the dashboard's local-only gate
+# (never reachable over the onion) and are phoenixd-specific (lnd/nwc operators manage their own
+# node/wallet elsewhere).
+def _wallet_or_error(request: Request):
+    """Return (wallet, None) when allowed, else (None, JSONResponse) with the reason."""
+    if not _is_local(request):
+        return None, _NOT_FOUND  # don't expose the wallet over the onion
+    if os.getenv("PAYMENTS", "mock").lower() != "phoenixd":
+        return None, JSONResponse(
+            {"error": "the wallet is available only with the phoenixd payout backend"},
+            status_code=400)
+    from host import wallet
+    return wallet.get_wallet(), None
+
+
+def _wallet_call(request: Request, fn):
+    """Run a wallet call behind the gate, surfacing phoenixd failures as a clean 502."""
+    from host import wallet
+    w, err = _wallet_or_error(request)
+    if err is not None:
+        return err
+    try:
+        return fn(w)
+    except wallet.WalletError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+
+@app.get("/api/wallet/balance")
+def wallet_balance(request: Request):
+    return _wallet_call(request, lambda w: w.balance())
+
+
+@app.get("/api/wallet/channels")
+def wallet_channels(request: Request):
+    return _wallet_call(request, lambda w: w.channels())
+
+
 # --- first-run setup wizard (LOCAL ONLY) ------------------------------------
 # Same local-only gate as the dashboard: these read hardware/config and WRITE .env.host + restart
 # the service, so they must never be reachable over the .onion. The wizard is host/static/wizard.html.
