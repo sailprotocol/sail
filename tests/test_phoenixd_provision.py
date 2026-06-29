@@ -113,11 +113,27 @@ def test_provision_raises_if_wallet_not_persisted():
             raise AssertionError("expected provision() to refuse an un-persisted wallet")
 
 
+# ---- seed/conf file permissions (the plaintext-seed backstop) -------------
+def test_secure_seed_files_tightens_perms(tmp_path, monkeypatch):
+    import os as _os
+    d = tmp_path / ".phoenix"
+    d.mkdir()
+    seed = d / "seed.dat"; seed.write_text("word " * 12); seed.chmod(0o644)
+    conf = d / "phoenix.conf"; conf.write_text("http-password=secret"); conf.chmod(0o644)
+    monkeypatch.setattr(ps, "PHOENIX_DIR", d)
+    monkeypatch.setattr(ps, "SEED_FILE", seed)
+    monkeypatch.setattr(ps, "CONF_FILE", conf)
+    ps.secure_seed_files()
+    assert (seed.stat().st_mode & 0o777) == 0o600, oct(seed.stat().st_mode)
+    assert (conf.stat().st_mode & 0o777) == 0o600, oct(conf.stat().st_mode)
+    assert (d.stat().st_mode & 0o777) == 0o700, oct(d.stat().st_mode)
+
+
 # ---- endpoint: failure surfaces an error and gates the seed step -----------
 def _client():
     from fastapi.testclient import TestClient
     import host.daemon as d
-    return TestClient(d.app)
+    return TestClient(d.operator_app)  # /api/setup/* lives on the localhost-only operator app
 
 
 def test_payout_endpoint_phoenixd_failure_returns_error_and_no_seed():

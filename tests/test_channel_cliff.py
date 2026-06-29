@@ -126,7 +126,7 @@ def test_api_status_carries_receivable():
     import host.daemon as d
     # mock backend -> always receivable; status must still expose the fields
     d._pay_health = {"ts": 0.0, "ok": None, "detail": "", "receivable": True, "receive_detail": "ok"}
-    c = TestClient(d.app)
+    c = TestClient(d.operator_app)  # /api/status lives on the localhost-only operator app
     j = c.get("/api/status").json()
     assert "receivable" in j, j
     assert "receive_detail" in j, j

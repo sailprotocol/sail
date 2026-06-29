@@ -127,7 +127,8 @@ def test_channels_totals_sum_across_channels():
 def _client():
     from fastapi.testclient import TestClient
     import host.daemon as d
-    return TestClient(d.app), d
+    # wallet routes live on the LOCALHOST-only operator app, not the onion-exposed `app`
+    return TestClient(d.operator_app), d
 
 
 def _set(monkeypatch, payments):
@@ -427,6 +428,30 @@ def test_endpoint_incoming_reports_paid(monkeypatch):
                         lambda req: (_wallet({"/payments/incoming/HH": FakeResp(payload={"isPaid": True, "receivedSat": 30000})}), None))
     r = c.get("/api/wallet/incoming/HH")
     assert r.status_code == 200 and r.json() == {"paid": True, "receivedSat": 30000}, r.text
+
+
+# ---- physical separation: onion app must NOT mount operator routes --------
+def _paths(app):
+    return {getattr(r, "path", None) for r in app.routes}
+
+
+def test_public_app_excludes_wallet_and_setup_routes():
+    """Regression guard: the onion-exposed `app` must expose ONLY public routes. If a wallet/setup/
+    control route ever lands on it, it'd be reachable over Tor — fail loudly here."""
+    import host.daemon as d
+    public = _paths(d.app)
+    leaked = [p for p in public if p and (p.startswith("/api/wallet") or p.startswith("/api/setup")
+                                          or p.startswith("/api/control") or p in ("/", "/setup"))]
+    assert leaked == [], f"operator routes leaked onto the onion-exposed app: {leaked}"
+    assert "/v1/inference" in public, "public inference endpoint must stay on the onion app"
+
+
+def test_operator_app_has_wallet_and_setup_but_not_inference():
+    import host.daemon as d
+    op = _paths(d.operator_app)
+    assert "/api/wallet/seed" in op and "/api/wallet/pay" in op and "/api/wallet/close" in op
+    assert "/api/setup/payout" in op and "/" in op and "/setup" in op
+    assert "/v1/inference" not in op  # inference is not served on the operator port
 
 
 if __name__ == "__main__":

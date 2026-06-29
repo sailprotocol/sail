@@ -39,7 +39,14 @@ from host import payments as pay_mod
 from host import moderation
 from host import transport
 
+# Two ASGI apps on two binds, so the operator surface is PHYSICALLY unreachable over Tor — not
+# just header-gated. `app` is PUBLIC: only /v1/* (paid inference) + /mock/* (dev), and it's the
+# one the Tor hidden service forwards to (transport.setup_onion → PORT). `operator_app` is the
+# operator surface (dashboard, wizard, /api/wallet/*, /api/setup/*, /api/control/*) and binds
+# LOCALHOST-ONLY (OPERATOR_HOST:OPERATOR_PORT), never added to the onion config. So the seed /
+# pay / close endpoints can't be reached over the onion regardless of the Host header.
 app = FastAPI(title="SAIL host")
+operator_app = FastAPI(title="SAIL host — operator (local only)")
 
 # --- host identity & config -------------------------------------------------
 # Stable, persisted Nostr identity (shared/identity.py) — same real pubkey + alias across reboots
@@ -48,6 +55,9 @@ from shared import identity
 PUBKEY = identity.host_pubkey_hex()
 PORT = int(os.getenv("PORT", "8001"))
 ENDPOINT = os.getenv("HOST_ENDPOINT", f"http://127.0.0.1:{PORT}")
+# Operator surface: a separate localhost-only listener (NEVER added to the Tor hidden service).
+OPERATOR_HOST = os.getenv("OPERATOR_HOST", "127.0.0.1")  # keep it loopback — do not bind 0.0.0.0
+OPERATOR_PORT = int(os.getenv("OPERATOR_PORT", "8081"))
 PRICE_MSAT_PER_TOKEN = int(os.getenv("PRICE_MSAT_PER_TOKEN", "1000"))  # 1 sat/token (demo)
 TRANSPORT = os.getenv("TRANSPORT", "clearnet").lower()  # clearnet | tor
 CHUNK_TOKENS = max(1, int(os.getenv("CHUNK_TOKENS", "8")))  # metered settlement granularity
@@ -187,9 +197,46 @@ def _reannounce_loop(interval: int) -> None:
             print(f"[host] re-announce failed: {e}")
 
 
+def _run_operator_app() -> None:
+    """Serve the operator surface on a LOCALHOST-ONLY bind that is never added to the Tor hidden
+    service — so the dashboard, wizard, and /api/wallet/* (seed, pay, close) + /api/setup/* are
+    physically unreachable over the onion, not merely header-gated."""
+    import uvicorn
+    cfg = uvicorn.Config(operator_app, host=OPERATOR_HOST, port=OPERATOR_PORT, log_level="warning")
+    server = uvicorn.Server(cfg)
+    server.install_signal_handlers = lambda: None  # we're not the main thread
+    try:
+        server.run()
+    except OSError as e:  # e.g. port already in use — surface it; the host keeps serving inference
+        print(f"[host] WARNING: operator surface could not bind {OPERATOR_HOST}:{OPERATOR_PORT} "
+              f"({e}). The dashboard/wizard/wallet won't be reachable — set OPERATOR_PORT to a free "
+              f"port and restart.")
+
+
+def _maybe_start_operator() -> None:
+    """Start the operator listener once, in a daemon thread. Skipped under tests (TestClient fires
+    startup events) via SAIL_OPERATOR_AUTOSTART=0 so the suite doesn't bind a real port."""
+    if os.getenv("SAIL_OPERATOR_AUTOSTART", "1") == "0":
+        return
+    threading.Thread(target=_run_operator_app, daemon=True, name="sail-operator").start()
+    print(f"[host] operator surface (LOCAL ONLY): http://{OPERATOR_HOST}:{OPERATOR_PORT}/  "
+          f"— dashboard, wizard, wallet. Not exposed over Tor.")
+
+
 @app.on_event("startup")
 def publish_listing() -> None:
     global ENDPOINT
+    # Bring up the operator surface first, so the dashboard/wizard are reachable even before (or
+    # without) a public listing — e.g. a fresh host still in /setup.
+    _maybe_start_operator()
+    # phoenixd seed.dat + phoenix.conf hold plaintext recovery material; make sure they're 0600
+    # (backstop for nodes provisioned before SAIL tightened perms — see phoenixd_setup).
+    if os.getenv("PAYMENTS", "mock").lower() == "phoenixd":
+        try:
+            from host import phoenixd_setup
+            phoenixd_setup.secure_seed_files()
+        except Exception as e:  # noqa: BLE001 — never block startup on a perms tidy
+            print(f"[host] note: could not tighten ~/.phoenix perms: {e}")
     # Moderation gate: refuse to start serving a disallowed model, or any image-modality model
     # without a real CSAM matcher. Fail loudly here rather than per-request.
     moderation.assert_can_serve(_model)
@@ -477,14 +524,14 @@ def _is_local(request: Request) -> bool:
     return ".onion" not in (request.headers.get("host", ""))
 
 
-@app.get("/sail.css")
+@operator_app.get("/sail.css")
 def sail_css():
     """Shared SAIL stylesheet (design tokens + components), used by the dashboard + wizard. Static
     design assets only — no data — so it's served ungated."""
     return FileResponse(_STATIC / "sail.css", media_type="text/css")
 
 
-@app.get("/")
+@operator_app.get("/")
 def dashboard(request: Request):
     if not _is_local(request):
         return JSONResponse({"error": "not found"}, status_code=404)  # don't expose over the onion
@@ -514,7 +561,7 @@ def _payments_health() -> dict:
     return _pay_health
 
 
-@app.get("/api/status")
+@operator_app.get("/api/status")
 def api_status(request: Request):
     if not _is_local(request):
         return JSONResponse({"error": "not found"}, status_code=404)
@@ -549,7 +596,7 @@ def api_status(request: Request):
     }
 
 
-@app.get("/api/selftest")
+@operator_app.get("/api/selftest")
 def api_selftest(request: Request):
     """Self-test: send a tiny prompt to our OWN endpoint (over Tor if it's a .onion) and confirm a
     402 + invoice comes back — proof clients can reach us and pay. Mints one unpaid invoice."""
@@ -607,12 +654,12 @@ def _wallet_call(request: Request, fn):
         return JSONResponse({"error": str(e)}, status_code=502)
 
 
-@app.get("/api/wallet/balance")
+@operator_app.get("/api/wallet/balance")
 def wallet_balance(request: Request):
     return _wallet_call(request, lambda w: w.balance())
 
 
-@app.get("/api/wallet/channels")
+@operator_app.get("/api/wallet/channels")
 def wallet_channels(request: Request):
     return _wallet_call(request, lambda w: w.channels())
 
@@ -626,7 +673,7 @@ def _qr_data_uri(text: str) -> str | None:
     return segno.make(text, error="l").svg_data_uri(scale=4, border=3, dark="#000000", light="#ffffff")
 
 
-@app.post("/api/wallet/receive")
+@operator_app.post("/api/wallet/receive")
 async def wallet_receive(request: Request):
     """Mint a BOLT11 to receive into the wallet (the 'fund me / auto-open my channel' invoice).
     amountSat optional (blank = any-amount). Returns the invoice as copyable text + an inline QR."""
@@ -657,14 +704,14 @@ async def wallet_receive(request: Request):
     return result
 
 
-@app.get("/api/wallet/incoming/{payment_hash}")
+@operator_app.get("/api/wallet/incoming/{payment_hash}")
 def wallet_incoming(payment_hash: str, request: Request):
     """Has THIS invoice been paid? Backs the receive modal's 'payment received' confirmation so the
     operator gets explicit feedback (not just a background balance change)."""
     return _wallet_call(request, lambda w: w.incoming_status(payment_hash))
 
 
-@app.post("/api/wallet/seed")
+@operator_app.post("/api/wallet/seed")
 async def wallet_seed(request: Request):
     """Reveal the phoenixd recovery seed for the operator to back up. EXTREMELY sensitive: anyone
     with these words controls the funds. Defenses: the local-only gate (never the onion), POST +
@@ -690,7 +737,7 @@ async def wallet_seed(request: Request):
     return {"words": words, "count": len(words)}
 
 
-@app.post("/api/wallet/pay")
+@operator_app.post("/api/wallet/pay")
 async def wallet_pay(request: Request):
     """Withdraw via Lightning: pay an external BOLT11 from the wallet. phoenixd /payinvoice."""
     from host import wallet
@@ -720,7 +767,7 @@ async def wallet_pay(request: Request):
         return JSONResponse({"error": str(e)}, status_code=502)
 
 
-@app.post("/api/wallet/close")
+@operator_app.post("/api/wallet/close")
 async def wallet_close(request: Request):
     """Close the channel(s) and sweep the on-chain remainder to the operator's BTC address. The
     Lightning balance should be withdrawn first (pay); this empties what's left on-chain."""
@@ -771,14 +818,14 @@ def _ollama_models() -> list[dict]:
         return []
 
 
-@app.get("/setup")
+@operator_app.get("/setup")
 def setup_page(request: Request):
     if not _is_local(request):
         return _NOT_FOUND
     return FileResponse(_STATIC / "wizard.html")
 
 
-@app.get("/api/setup/detect")
+@operator_app.get("/api/setup/detect")
 def setup_detect(request: Request):
     """Step 1: real GPU / Ollama / Tor checks for the machine."""
     if not _is_local(request):
@@ -818,14 +865,14 @@ def _ollama_reachable() -> bool:
         return False
 
 
-@app.get("/api/setup/models")
+@operator_app.get("/api/setup/models")
 def setup_models(request: Request):
     if not _is_local(request):
         return _NOT_FOUND
     return {"models": _ollama_models()}
 
 
-@app.post("/api/setup/pull")
+@operator_app.post("/api/setup/pull")
 async def setup_pull(request: Request):
     """Pull a model into Ollama, streaming its progress lines straight through to the wizard."""
     if not _is_local(request):
@@ -845,7 +892,7 @@ async def setup_pull(request: Request):
     return StreamingResponse(proxy(), media_type="application/x-ndjson")
 
 
-@app.post("/api/setup/model")
+@operator_app.post("/api/setup/model")
 async def setup_model(request: Request):
     if not _is_local(request):
         return _NOT_FOUND
@@ -858,7 +905,7 @@ async def setup_model(request: Request):
     return {"ok": True, **updates}
 
 
-@app.post("/api/setup/pricing")
+@operator_app.post("/api/setup/pricing")
 async def setup_pricing(request: Request):
     if not _is_local(request):
         return _NOT_FOUND
@@ -872,7 +919,7 @@ async def setup_pricing(request: Request):
     return {"ok": True, **updates}
 
 
-@app.post("/api/setup/payout")
+@operator_app.post("/api/setup/payout")
 async def setup_payout(request: Request):
     """Step 4 — configure a payout tier. phoenixd provisions a node + returns the seed for the
     back-up step; lnd just writes the manually-entered creds; nwc capability-checks the wallet
@@ -921,7 +968,7 @@ def _tor_reachable() -> bool:
         return False
 
 
-@app.post("/api/setup/golive")
+@operator_app.post("/api/setup/golive")
 def setup_golive(request: Request):
     """Final step. Pick the transport (Tor when reachable, else a deliberate clearnet fallback),
     INSTALL + enable the sail-host systemd unit (so a host that looks live survives reboot — it was
@@ -966,7 +1013,7 @@ def setup_golive(request: Request):
 # Pause/Resume/Stop&remove the sail-host systemd unit. Same .onion gate as the dashboard. All reuse
 # config_writer.service_command (try `sudo -n`, else surface the command) — no new mechanism. None
 # of these touch ~/.phoenix, the onion key, or the nsec; remove only affects the systemd unit.
-@app.post("/api/control/pause")
+@operator_app.post("/api/control/pause")
 def control_pause(request: Request):
     """Stop the service: listing goes stale, daemon stops. Resume brings the same identity back."""
     if not _is_local(request):
@@ -975,7 +1022,7 @@ def control_pause(request: Request):
     return config_writer.service_command("stop")
 
 
-@app.post("/api/control/resume")
+@operator_app.post("/api/control/resume")
 def control_resume(request: Request):
     if not _is_local(request):
         return _NOT_FOUND
@@ -983,7 +1030,7 @@ def control_resume(request: Request):
     return config_writer.service_command("start")
 
 
-@app.post("/api/control/remove")
+@operator_app.post("/api/control/remove")
 async def control_remove(request: Request):
     """Disable + stop the unit now; the unit-FILE deletion still needs a manual sudo step (we never
     auto-rm a system unit), so those commands are surfaced. Gated by type-to-confirm. Funds/keys in

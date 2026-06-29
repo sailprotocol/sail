@@ -115,6 +115,23 @@ def is_provisioned() -> bool:
     return CONF_FILE.exists() and SEED_FILE.exists()
 
 
+def secure_seed_files() -> dict:
+    """Tighten permissions on phoenixd's secret files. seed.dat is the PLAINTEXT recovery phrase
+    (phoenixd's design) and phoenix.conf holds the API password — phoenixd writes both world-readable
+    (0644) by default, so any local user could read them. chmod them 0600 and the ~/.phoenix dir
+    0700 as the file-perms backstop. Idempotent; safe to call on every startup. Returns what changed."""
+    changed = {}
+    targets = {PHOENIX_DIR: 0o700, SEED_FILE: 0o600, CONF_FILE: 0o600}
+    for path, mode in targets.items():
+        try:
+            if path.exists() and (path.stat().st_mode & 0o777) != mode:
+                path.chmod(mode)
+                changed[str(path)] = oct(mode)
+        except OSError:
+            pass
+    return changed
+
+
 # --- first run --------------------------------------------------------------
 def _api_port() -> tuple[str, int]:
     u = urlparse(os.getenv("PHOENIXD_API_URL", "http://127.0.0.1:9740"))
@@ -275,6 +292,7 @@ def provision(version: str | None = None) -> dict:
         raise RuntimeError(
             f"phoenixd provisioning incomplete — expected wallet files under {PHOENIX_DIR} "
             f"(phoenix.conf + seed.dat) but they are missing")
+    secure_seed_files()  # phoenixd writes seed.dat/phoenix.conf 0644 — tighten before we go further
     password = read_http_password()
     seed_words = read_seed_words()  # surfaced locally only; never written elsewhere
 

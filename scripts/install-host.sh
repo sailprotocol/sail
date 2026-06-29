@@ -237,9 +237,10 @@ Start the host daemon:
   ${B}cd $REPO${RST}
   ${B}ENV_FILE=.env.host PYTHONPATH=. .venv/bin/uvicorn host.daemon:app --port 8001${RST}
 
-Then open the setup wizard in your browser (local only):
+Then open the setup wizard in your browser (it runs on a separate localhost-only port that is
+never exposed over Tor):
 
-  ${B}http://localhost:8001/setup${RST}
+  ${B}http://localhost:8081/setup${RST}
 
 The wizard handles the rest: pull the model, set pricing, pick your payout backend
 (phoenixd / LND / NWC), back up your seed, and go live.
