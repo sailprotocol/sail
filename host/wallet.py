@@ -82,26 +82,68 @@ class PhoenixdWallet:
         return {"bolt11": j.get("serialized"), "paymentHash": j.get("paymentHash"),
                 "amountSat": amount_sat, "description": desc}
 
-    # --- internals -----------------------------------------------------------
-    def _get(self, path: str):
-        try:
-            r = self._client.get(path)
-        except httpx.HTTPError as e:
-            raise WalletError(f"phoenixd unreachable at {self._client.base_url}: {str(e)[:120]}") from e
-        return self._json(r, path)
+    # --- withdraw (pay an external invoice) ----------------------------------
+    def pay(self, invoice: str, amount_sat: int | None = None) -> dict:
+        """Pay an external BOLT11 (withdraw via Lightning). phoenixd /payinvoice. amountSat only for
+        an any-amount invoice. Returns what actually went out + the routing fee."""
+        inv = (invoice or "").strip()
+        if not inv:
+            raise WalletError("no invoice provided")
+        data = {"invoice": inv}
+        if amount_sat is not None:
+            data["amountSat"] = str(int(amount_sat))
+        j = self._post("/payinvoice", data)
+        return {"paymentHash": j.get("paymentHash"),
+                "recipientAmountSat": _int(j.get("recipientAmountSat")),
+                "routingFeeSat": _int(j.get("routingFeeSat"))}
 
-    def _post(self, path: str, data: dict):
+    # --- close + sweep on-chain ----------------------------------------------
+    def close(self, channel_id: str, address: str, feerate_sat_byte: int) -> dict:
+        """Close one channel, sweeping its on-chain remainder to `address`. phoenixd /closechannel
+        returns the closing txid (plain text or JSON depending on build) — tolerate both."""
+        data = {"channelId": channel_id, "address": address,
+                "feerateSatByte": str(int(feerate_sat_byte))}
+        r = self._ok(self._call("POST", "/closechannel", data))
+        body = (getattr(r, "text", "") or "").strip()
         try:
-            r = self._client.post(path, data=data)
+            j = r.json()
+            txid = (j.get("txId") or j.get("txid")) if isinstance(j, dict) else (j or body)
+        except ValueError:
+            txid = body
+        return {"channelId": channel_id, "closingTxId": txid or body}
+
+    # --- payment-landed check (for the receive modal's confirmation) ---------
+    def incoming_status(self, payment_hash: str) -> dict:
+        """Has a specific incoming invoice been paid? phoenixd /payments/incoming/{hash}. A 404 means
+        not seen yet (treat as unpaid) so polling is safe before the payment lands."""
+        r = self._call("GET", f"/payments/incoming/{payment_hash}")
+        if r.status_code == 404:
+            return {"paid": False, "receivedSat": 0}
+        j = self._json(self._ok(r), "incoming")
+        return {"paid": bool(j.get("isPaid")), "receivedSat": _int(j.get("receivedSat"))}
+
+    # --- internals -----------------------------------------------------------
+    def _call(self, method: str, path: str, data: dict | None = None):
+        try:
+            return self._client.get(path) if method == "GET" else self._client.post(path, data=data)
         except httpx.HTTPError as e:
             raise WalletError(f"phoenixd unreachable at {self._client.base_url}: {str(e)[:120]}") from e
-        return self._json(r, path)
 
     @staticmethod
-    def _json(r, path: str):
+    def _ok(r):
         if r.status_code != 200:
             body = (getattr(r, "text", "") or "").strip()
             raise WalletError(f"phoenixd HTTP {r.status_code}" + (f": {body[:160]}" if body else ""))
+        return r
+
+    def _get(self, path: str):
+        return self._json(self._ok(self._call("GET", path)), path)
+
+    def _post(self, path: str, data: dict):
+        return self._json(self._ok(self._call("POST", path, data)), path)
+
+    @staticmethod
+    def _json(r, path: str):
         try:
             return r.json()
         except ValueError as e:

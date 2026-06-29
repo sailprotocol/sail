@@ -69,6 +69,14 @@
   .qrbox img{width:230px; height:230px; image-rendering:pixelated;}
   .modal .cmd.wrap code{white-space:normal; word-break:break-all; overflow-x:visible;}
   .rcverr{color:var(--bad); font-size:0.86rem; margin:0 0 12px; display:none;}
+  .okbox{border:1px solid var(--good); background:var(--good-bg); color:var(--good); border-radius:9px; padding:12px 14px; font-size:0.9rem; margin-bottom:6px;} .okbox b{color:#7fd29a;}
+  .rcvdone{border:1px solid var(--good); background:var(--good-bg); border-radius:11px; padding:18px; text-align:center; margin-bottom:12px;} .rcvdone .big{font-family:'Bricolage Grotesque'; font-weight:800; font-size:1.3rem; color:var(--good);}
+  /* seed grid */
+  .seedgrid{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:6px 0 4px;}
+  @media (max-width:520px){ .seedgrid{grid-template-columns:repeat(2,1fr);} }
+  .seedgrid .sw{display:flex; gap:7px; align-items:baseline; background:var(--code-bg); border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-family:'IBM Plex Mono',monospace; font-size:0.86rem;}
+  .seedgrid .sw .i{color:var(--muted); font-size:0.7rem; min-width:16px;}
+  .seedgrid.blurred{filter:blur(7px); user-select:none; pointer-events:none;}
 </style>
 </head>
 <body>
@@ -133,6 +141,9 @@
     <div class="cliff" id="w-cliff" style="display:none;"></div>
     <div class="wactions">
       <button class="btn primary" id="w-receive">Receive / fund</button>
+      <button class="btn ghost" id="w-withdraw">Withdraw</button>
+      <button class="btn ghost" id="w-backup">Back up wallet</button>
+      <button class="btn danger" id="w-close">Close &amp; sweep…</button>
     </div>
   </div>
 
@@ -192,11 +203,55 @@
     <div id="rcv-result" style="display:none;">
       <div class="qrbox"><img id="rcv-qr" alt="invoice QR code"></div>
       <div class="cmd wrap"><code id="rcv-bolt11"></code><button class="copy" id="rcv-copy">copy</button></div>
+      <p class="ctl-note" style="margin-top:10px;">Waiting for payment… this confirms here automatically when it lands.</p>
     </div>
+    <div id="rcv-done" class="rcvdone" style="display:none;"></div>
     <div class="actions">
       <button class="btn" data-close>Close</button>
       <button class="btn primary" id="rcv-go">Generate invoice</button>
     </div>
+  </div>
+</div>
+
+<!-- Back up wallet (reveal recovery phrase) -->
+<div class="scrim" id="m-seed">
+  <div class="modal danger-modal">
+    <h3>Back up your recovery phrase</h3>
+    <div class="danger-box"><b>Anyone with these words controls your funds.</b> Write them on paper, store them offline, and <b>never</b> share, photograph, or save them digitally. SAIL never sees or stores them.</div>
+    <div id="seed-grid" class="seedgrid blurred"></div>
+    <p class="rcverr" id="seed-err"></p>
+    <p class="ctl-note" id="seed-hint">Hidden by default. Click reveal only when no one can see your screen.</p>
+    <div class="actions">
+      <button class="btn" data-close>Close</button>
+      <button class="btn ghost" id="seed-copy" style="display:none;">Copy</button>
+      <button class="btn primary" id="seed-reveal">Reveal phrase</button>
+    </div>
+  </div>
+</div>
+
+<!-- Withdraw via Lightning (pay an external invoice) -->
+<div class="scrim" id="m-withdraw">
+  <div class="modal">
+    <h3>Withdraw via Lightning</h3>
+    <p>Paste an external Lightning invoice (BOLT11). phoenixd pays it from your balance — this is irreversible.</p>
+    <div class="typefield"><label>Lightning invoice (<span class="mono">lnbc…</span>)</label><input id="wd-inv" type="text" autocomplete="off" spellcheck="false" placeholder="lnbc…"></div>
+    <div class="typefield"><label>Amount in <span class="mono">sat</span> — only for an any-amount invoice (blank otherwise)</label><input id="wd-amt" type="number" min="1" inputmode="numeric" placeholder=""></div>
+    <p class="rcverr" id="wd-err"></p>
+    <div id="wd-ok" class="okbox" style="display:none;"></div>
+    <div class="actions"><button class="btn" data-close>Cancel</button><button class="btn primary" id="wd-go">Review &amp; send</button></div>
+  </div>
+</div>
+
+<!-- Close channel & sweep on-chain -->
+<div class="scrim" id="m-close">
+  <div class="modal danger-modal">
+    <h3>Close channel &amp; sweep on-chain</h3>
+    <div class="danger-box"><b>Withdraw your Lightning balance first.</b> Closing sweeps only the on-chain remainder to the address below, closes your channel, and is irreversible — receiving again later needs a new channel.</div>
+    <div class="typefield"><label>Destination BTC address (on-chain)</label><input id="cl-addr" type="text" autocomplete="off" spellcheck="false" placeholder="bc1…"></div>
+    <div class="typefield"><label>Fee rate (<span class="mono">sat/vByte</span>) — check a mempool fee estimator</label><input id="cl-fee" type="number" min="1" inputmode="numeric" placeholder="e.g. 2"></div>
+    <p class="rcverr" id="cl-err"></p>
+    <div id="cl-ok" class="okbox" style="display:none;"></div>
+    <div class="actions"><button class="btn" data-close>Cancel</button><button class="btn danger" id="cl-go">Review close</button></div>
   </div>
 </div>
 
@@ -262,7 +317,9 @@ function confirmModal(title,body,go,fn){
   const g=$('c-go'); g.textContent=go; g.onclick=()=>{ closeAll(); fn(); }; open('m-confirm');
 }
 function open(id){ $(id).classList.add('on'); }
-function closeAll(){ document.querySelectorAll('.scrim').forEach(s=>s.classList.remove('on')); }
+let rcvPoll=null;
+function stopRcvPoll(){ if(rcvPoll){ clearInterval(rcvPoll); rcvPoll=null; } }
+function closeAll(){ stopRcvPoll(); clearSeed(); document.querySelectorAll('.scrim').forEach(s=>s.classList.remove('on')); }
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=closeAll);
 document.querySelectorAll('.scrim').forEach(s=>s.addEventListener('click',e=>{ if(e.target===s) closeAll(); }));
 
@@ -382,7 +439,9 @@ async function refreshWallet(payments){
 
 // ---- receive / fund flow ----
 $('w-receive').onclick = ()=>{
+  stopRcvPoll();
   $('rcv-result').style.display='none'; $('rcv-err').style.display='none';
+  $('rcv-done').style.display='none'; $('rcv-amt').disabled=false;
   $('rcv-go').disabled=false; $('rcv-go').textContent='Generate invoice';
   open('m-receive'); $('rcv-amt').focus();
 };
@@ -404,10 +463,97 @@ $('rcv-go').onclick = async ()=>{
   $('rcv-qr').src = r.qr || '';
   $('rcv-bolt11').textContent = r.bolt11 || '';
   $('rcv-copy').dataset.c = r.bolt11 || '';
-  $('rcv-result').style.display='';
+  $('rcv-result').style.display=''; $('rcv-done').style.display='none';
   $('rcv-go').disabled=false; $('rcv-go').textContent='New invoice';
+  watchInvoice(r.paymentHash);  // confirm when it lands
 };
 $('rcv-copy').onclick = ()=>{ navigator.clipboard?.writeText($('rcv-copy').dataset.c||''); const b=$('rcv-copy'); b.textContent='copied'; setTimeout(()=>b.textContent='copy',1200); };
+
+// Poll until THIS invoice is paid, then flip the modal to a confirmation and refresh the card.
+function watchInvoice(hash){
+  stopRcvPoll();
+  if(!hash) return;
+  rcvPoll = setInterval(async ()=>{
+    let s=null;
+    try{ s = await (await fetch('/api/wallet/incoming/'+encodeURIComponent(hash))).json(); }catch{ return; }
+    if(s && s.paid){
+      stopRcvPoll();
+      $('rcv-result').style.display='none'; $('rcv-amt').disabled=true; $('rcv-go').disabled=true;
+      $('rcv-done').innerHTML = `<div class="big">✓ Payment received</div>`
+        + `<div>${num(s.receivedSat||0)} sat — your channel is open and you can now be paid.</div>`;
+      $('rcv-done').style.display='';
+      refresh();  // updates balance/channel card + clears the cliff warning
+    }
+  }, 2500);
+}
+
+// ---- back up wallet (reveal seed) ----
+function clearSeed(){ $('seed-grid').innerHTML=''; $('seed-grid').classList.add('blurred');
+  $('seed-copy').style.display='none'; $('seed-copy').dataset.c=''; if(seedTimer){ clearTimeout(seedTimer); seedTimer=null; }
+  $('seed-reveal').textContent='Reveal phrase'; $('seed-err').style.display='none'; }
+let seedTimer=null, seedShown=false;
+$('w-backup').onclick = ()=>{ clearSeed(); seedShown=false; open('m-seed'); };
+$('seed-reveal').onclick = async ()=>{
+  if(seedShown){ hideSeed(); return; }
+  $('seed-err').style.display='none';
+  let r=null;
+  try{ r = await (await fetch('/api/wallet/seed',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({confirm:'reveal'})})).json(); }
+  catch{ r={error:'could not reach the host'}; }
+  if(!r || r.error || !r.words){ $('seed-err').textContent=(r&&r.error)||'could not read seed'; $('seed-err').style.display='block'; return; }
+  $('seed-grid').innerHTML = r.words.map((w,i)=>`<div class="sw"><span class="i">${i+1}</span><span>${w}</span></div>`).join('');
+  $('seed-copy').dataset.c = r.words.join(' ');
+  showSeed();
+};
+function showSeed(){ $('seed-grid').classList.remove('blurred'); $('seed-copy').style.display='';
+  $('seed-reveal').textContent='Hide'; seedShown=true;
+  if(seedTimer) clearTimeout(seedTimer); seedTimer=setTimeout(hideSeed, 45000); }  // auto re-hide
+function hideSeed(){ $('seed-grid').classList.add('blurred'); $('seed-reveal').textContent='Reveal phrase'; seedShown=false; if(seedTimer){ clearTimeout(seedTimer); seedTimer=null; } }
+$('seed-copy').onclick = ()=>{ navigator.clipboard?.writeText($('seed-copy').dataset.c||''); const b=$('seed-copy'); b.textContent='copied — write it on paper, then clear your clipboard'; setTimeout(()=>b.textContent='Copy',2200); };
+
+// ---- withdraw (pay an external invoice) — two-step confirm ----
+let wdArmed=false;
+$('w-withdraw').onclick = ()=>{ $('wd-inv').value=''; $('wd-amt').value=''; $('wd-err').style.display='none';
+  $('wd-ok').style.display='none'; wdArmed=false; $('wd-go').textContent='Review & send'; $('wd-go').disabled=false;
+  open('m-withdraw'); $('wd-inv').focus(); };
+$('wd-inv').addEventListener('input',()=>{ wdArmed=false; $('wd-go').textContent='Review & send'; });
+$('wd-go').onclick = async ()=>{
+  const inv=$('wd-inv').value.trim();
+  if(!inv){ $('wd-err').textContent='paste a Lightning invoice first'; $('wd-err').style.display='block'; return; }
+  $('wd-err').style.display='none';
+  if(!wdArmed){ wdArmed=true; $('wd-go').textContent='⚠ Confirm — pay now (irreversible)'; return; }
+  const body={invoice:inv}; const amt=$('wd-amt').value.trim(); if(amt!=='') body.amountSat=parseInt(amt,10);
+  $('wd-go').disabled=true; $('wd-go').textContent='Sending…';
+  let r=null;
+  try{ r = await (await fetch('/api/wallet/pay',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})).json(); }
+  catch{ r={error:'could not reach the host'}; }
+  if(!r || r.error){ $('wd-err').textContent=(r&&r.error)||'payment failed'; $('wd-err').style.display='block';
+    wdArmed=false; $('wd-go').disabled=false; $('wd-go').textContent='Review & send'; return; }
+  $('wd-ok').innerHTML = `<b>✓ Sent ${num(r.recipientAmountSat||0)} sat</b>${r.routingFeeSat?` · routing fee ${num(r.routingFeeSat)} sat`:''}`;
+  $('wd-ok').style.display=''; $('wd-go').style.display='none'; refresh();
+};
+
+// ---- close & sweep — two-step confirm ----
+let clArmed=false;
+$('w-close').onclick = ()=>{ $('cl-addr').value=''; $('cl-fee').value=''; $('cl-err').style.display='none';
+  $('cl-ok').style.display='none'; clArmed=false; $('cl-go').style.display=''; $('cl-go').textContent='Review close'; $('cl-go').disabled=false;
+  open('m-close'); $('cl-addr').focus(); };
+['cl-addr','cl-fee'].forEach(id=>$(id).addEventListener('input',()=>{ clArmed=false; $('cl-go').textContent='Review close'; }));
+$('cl-go').onclick = async ()=>{
+  const addr=$('cl-addr').value.trim(), fee=$('cl-fee').value.trim();
+  if(!addr){ $('cl-err').textContent='enter a destination BTC address'; $('cl-err').style.display='block'; return; }
+  if(!fee || parseInt(fee,10)<1){ $('cl-err').textContent='enter a fee rate (sat/vByte)'; $('cl-err').style.display='block'; return; }
+  $('cl-err').style.display='none';
+  if(!clArmed){ clArmed=true; $('cl-go').textContent='⚠ Confirm — close & sweep (irreversible)'; return; }
+  $('cl-go').disabled=true; $('cl-go').textContent='Closing…';
+  let r=null;
+  try{ r = await (await fetch('/api/wallet/close',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({address:addr,feerateSatByte:parseInt(fee,10)})})).json(); }
+  catch{ r={error:'could not reach the host'}; }
+  if(!r || r.error){ $('cl-err').textContent=(r&&r.error)||'close failed'; $('cl-err').style.display='block';
+    clArmed=false; $('cl-go').disabled=false; $('cl-go').textContent='Review close'; return; }
+  const tx=(r.closed&&r.closed[0]&&r.closed[0].closingTxId)||'';
+  $('cl-ok').innerHTML = `<b>✓ Closing ${r.count} channel(s)</b> — sweeping on-chain to your address.`+(tx?`<br>txid: <span class="mono">${tx}</span>`:'');
+  $('cl-ok').style.display=''; $('cl-go').style.display='none'; refresh();
+};
 
 $('copyonion').onclick = ()=>{ navigator.clipboard?.writeText($('copyonion').dataset.c||''); const b=$('copyonion'); b.textContent='copied'; setTimeout(()=>b.textContent='copy',1200); };
 $('runtest').onclick = async ()=>{

@@ -574,14 +574,23 @@ def api_selftest(request: Request):
 # terminal phoenixd commands. These move money, so they share the dashboard's local-only gate
 # (never reachable over the onion) and are phoenixd-specific (lnd/nwc operators manage their own
 # node/wallet elsewhere).
-def _wallet_or_error(request: Request):
-    """Return (wallet, None) when allowed, else (None, JSONResponse) with the reason."""
+def _wallet_gate(request: Request):
+    """Gate every wallet route: local-only (NEVER over the onion — these move money / reveal the
+    seed) AND phoenixd-only. Returns a JSONResponse to short-circuit, or None when allowed."""
     if not _is_local(request):
-        return None, _NOT_FOUND  # don't expose the wallet over the onion
+        return _NOT_FOUND  # don't expose the wallet over the onion
     if os.getenv("PAYMENTS", "mock").lower() != "phoenixd":
-        return None, JSONResponse(
+        return JSONResponse(
             {"error": "the wallet is available only with the phoenixd payout backend"},
             status_code=400)
+    return None
+
+
+def _wallet_or_error(request: Request):
+    """Return (wallet, None) when allowed, else (None, JSONResponse) with the reason."""
+    err = _wallet_gate(request)
+    if err is not None:
+        return None, err
     from host import wallet
     return wallet.get_wallet(), None
 
@@ -646,6 +655,102 @@ async def wallet_receive(request: Request):
         return JSONResponse({"error": str(e)}, status_code=502)
     result["qr"] = _qr_data_uri(result.get("bolt11"))
     return result
+
+
+@app.get("/api/wallet/incoming/{payment_hash}")
+def wallet_incoming(payment_hash: str, request: Request):
+    """Has THIS invoice been paid? Backs the receive modal's 'payment received' confirmation so the
+    operator gets explicit feedback (not just a background balance change)."""
+    return _wallet_call(request, lambda w: w.incoming_status(payment_hash))
+
+
+@app.post("/api/wallet/seed")
+async def wallet_seed(request: Request):
+    """Reveal the phoenixd recovery seed for the operator to back up. EXTREMELY sensitive: anyone
+    with these words controls the funds. Defenses: the local-only gate (never the onion), POST +
+    an explicit {"confirm":"reveal"} so it can't be triggered accidentally / by a prefetch, and the
+    words are NEVER logged or persisted by SAIL — read straight from phoenixd's seed file and
+    returned only in this response body."""
+    err = _wallet_gate(request)  # local-only + phoenixd; no phoenixd client needed to read the file
+    if err is not None:
+        return err
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if (body.get("confirm") or "") != "reveal":
+        return JSONResponse({"error": "explicit confirmation required"}, status_code=400)
+    from host import phoenixd_setup
+    try:
+        words = phoenixd_setup.read_seed_words()
+    except FileNotFoundError:
+        return JSONResponse({"error": "no phoenixd seed file found on this host"}, status_code=404)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)[:160]}, status_code=500)
+    return {"words": words, "count": len(words)}
+
+
+@app.post("/api/wallet/pay")
+async def wallet_pay(request: Request):
+    """Withdraw via Lightning: pay an external BOLT11 from the wallet. phoenixd /payinvoice."""
+    from host import wallet
+    w, err = _wallet_or_error(request)
+    if err is not None:
+        return err
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    invoice = (body.get("invoice") or "").strip()
+    if not invoice:
+        return JSONResponse({"error": "a Lightning invoice (BOLT11) is required"}, status_code=400)
+    amount = body.get("amountSat")
+    if amount in ("", None):
+        amount = None
+    else:
+        try:
+            amount = int(amount)
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "amountSat must be a whole number of sats"}, status_code=400)
+        if amount < 1:
+            return JSONResponse({"error": "amountSat must be at least 1 sat"}, status_code=400)
+    try:
+        return w.pay(invoice, amount_sat=amount)
+    except wallet.WalletError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+
+@app.post("/api/wallet/close")
+async def wallet_close(request: Request):
+    """Close the channel(s) and sweep the on-chain remainder to the operator's BTC address. The
+    Lightning balance should be withdrawn first (pay); this empties what's left on-chain."""
+    from host import wallet
+    w, err = _wallet_or_error(request)
+    if err is not None:
+        return err
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    address = (body.get("address") or "").strip()
+    if not address:
+        return JSONResponse({"error": "a destination BTC address is required"}, status_code=400)
+    try:
+        feerate = int(body.get("feerateSatByte"))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "feerateSatByte must be a whole number (sat/vByte)"}, status_code=400)
+    if feerate < 1:
+        return JSONResponse({"error": "feerateSatByte must be at least 1"}, status_code=400)
+    try:
+        # Close the specific channel if given, else every open channel (sweep everything out).
+        cid = (body.get("channelId") or "").strip()
+        ids = [cid] if cid else [c["channelId"] for c in w.channels()["channels"] if c.get("channelId")]
+        if not ids:
+            return JSONResponse({"error": "no channel to close"}, status_code=400)
+        closed = [w.close(c, address, feerate) for c in ids]
+    except wallet.WalletError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    return {"closed": closed, "count": len(closed)}
 
 
 # --- first-run setup wizard (LOCAL ONLY) ------------------------------------

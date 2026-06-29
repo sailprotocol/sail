@@ -247,6 +247,188 @@ def test_endpoint_receive_surfaces_failure_as_502(monkeypatch):
     assert r.status_code == 502 and "unreachable" in r.json()["error"].lower(), r.text
 
 
+# ---- PhoenixdWallet.pay / close / incoming_status -------------------------
+def test_pay_success_returns_sent_and_fee():
+    w = _wallet({"/payinvoice": FakeResp(payload={"paymentHash": "h", "recipientAmountSat": 5000, "routingFeeSat": 3})})
+    out = w.pay("lnbc50u1pabc")
+    assert out == {"paymentHash": "h", "recipientAmountSat": 5000, "routingFeeSat": 3}
+
+
+def test_pay_empty_invoice_raises():
+    w = _wallet({})
+    try:
+        w.pay("   ")
+    except wallet.WalletError:
+        pass
+    else:
+        raise AssertionError("expected WalletError for empty invoice")
+
+
+def test_pay_failure_surfaces():
+    w = _wallet({"/payinvoice": FakeResp(status=400, text="insufficient balance")})
+    try:
+        w.pay("lnbc1")
+    except wallet.WalletError as e:
+        assert "insufficient balance" in str(e), e
+    else:
+        raise AssertionError("expected WalletError")
+
+
+def test_close_success_json_txid():
+    w = _wallet({"/closechannel": FakeResp(payload={"txId": "deadbeef"})})
+    assert w.close("c1", "bc1xyz", 2)["closingTxId"] == "deadbeef"
+
+
+def test_close_success_plain_text_txid():
+    # some phoenixd builds return the txid as plain text, not JSON
+    w = _wallet({"/closechannel": FakeResp(status=200, payload=None, text="abc123txid")})
+    assert w.close("c1", "bc1xyz", 2)["closingTxId"] == "abc123txid"
+
+
+def test_incoming_status_paid_and_unpaid():
+    paid = _wallet({"/payments/incoming/HH": FakeResp(payload={"isPaid": True, "receivedSat": 30000})})
+    assert paid.incoming_status("HH") == {"paid": True, "receivedSat": 30000}
+    unseen = _wallet({"/payments/incoming/HH": FakeResp(status=404, text="not found")})
+    assert unseen.incoming_status("HH") == {"paid": False, "receivedSat": 0}
+
+
+# ---- seed endpoint (security-critical) ------------------------------------
+def test_seed_blocked_over_onion(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    r = c.post("/api/wallet/seed", json={"confirm": "reveal"}, headers={"host": "secret.onion"})
+    assert r.status_code == 404, r.text  # the seed must NEVER be reachable over the onion
+
+
+def test_seed_requires_phoenixd(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "lnd")
+    r = c.post("/api/wallet/seed", json={"confirm": "reveal"})
+    assert r.status_code == 400, r.text
+
+
+def test_seed_requires_explicit_confirm(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    r = c.post("/api/wallet/seed", json={})
+    assert r.status_code == 400 and "confirm" in r.json()["error"].lower(), r.text
+
+
+def test_seed_success_returns_words(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    from host import phoenixd_setup
+    words = ["abandon"] * 12
+    monkeypatch.setattr(phoenixd_setup, "read_seed_words", lambda: words)
+    r = c.post("/api/wallet/seed", json={"confirm": "reveal"})
+    assert r.status_code == 200 and r.json() == {"words": words, "count": 12}, r.text
+
+
+def test_seed_missing_file_is_404(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    from host import phoenixd_setup
+
+    def _missing():
+        raise FileNotFoundError("seed.dat not found")
+    monkeypatch.setattr(phoenixd_setup, "read_seed_words", _missing)
+    r = c.post("/api/wallet/seed", json={"confirm": "reveal"})
+    assert r.status_code == 404, r.text
+
+
+# ---- pay endpoint ---------------------------------------------------------
+def test_endpoint_pay_success(monkeypatch):
+    c, d = _client()
+    _set(monkeypatch, "phoenixd")
+    monkeypatch.setattr(d, "_wallet_or_error",
+                        lambda req: (_wallet({"/payinvoice": FakeResp(payload={"paymentHash": "h", "recipientAmountSat": 9, "routingFeeSat": 0})}), None))
+    r = c.post("/api/wallet/pay", json={"invoice": "lnbc1"})
+    assert r.status_code == 200 and r.json()["recipientAmountSat"] == 9, r.text
+
+
+def test_endpoint_pay_requires_invoice(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    r = c.post("/api/wallet/pay", json={})
+    assert r.status_code == 400, r.text
+
+
+def test_endpoint_pay_blocked_over_onion(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    r = c.post("/api/wallet/pay", json={"invoice": "lnbc1"}, headers={"host": "x.onion"})
+    assert r.status_code == 404, r.text
+
+
+def test_endpoint_pay_surfaces_failure_502(monkeypatch):
+    c, d = _client()
+    _set(monkeypatch, "phoenixd")
+    monkeypatch.setattr(d, "_wallet_or_error",
+                        lambda req: (_wallet({"/payinvoice": FakeResp(status=400, text="route not found")}), None))
+    r = c.post("/api/wallet/pay", json={"invoice": "lnbc1"})
+    assert r.status_code == 502 and "route not found" in r.json()["error"], r.text
+
+
+# ---- close endpoint -------------------------------------------------------
+def _close_wallet():
+    return _wallet({
+        "/listchannels": FakeResp(payload=[{"channelId": "c1", "type": "x.Normal",
+                                             "balanceSat": 1000, "inboundLiquiditySat": 0}]),
+        "/closechannel": FakeResp(payload={"txId": "sweeptx"}),
+    })
+
+
+def test_endpoint_close_success(monkeypatch):
+    c, d = _client()
+    _set(monkeypatch, "phoenixd")
+    monkeypatch.setattr(d, "_wallet_or_error", lambda req: (_close_wallet(), None))
+    r = c.post("/api/wallet/close", json={"address": "bc1qxyz", "feerateSatByte": 2})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["count"] == 1 and j["closed"][0]["closingTxId"] == "sweeptx", j
+
+
+def test_endpoint_close_requires_address(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    r = c.post("/api/wallet/close", json={"feerateSatByte": 2})
+    assert r.status_code == 400, r.text
+
+
+def test_endpoint_close_requires_feerate(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    r = c.post("/api/wallet/close", json={"address": "bc1qxyz"})
+    assert r.status_code == 400, r.text
+
+
+def test_endpoint_close_no_channel_is_400(monkeypatch):
+    c, d = _client()
+    _set(monkeypatch, "phoenixd")
+    monkeypatch.setattr(d, "_wallet_or_error",
+                        lambda req: (_wallet({"/listchannels": FakeResp(payload=[])}), None))
+    r = c.post("/api/wallet/close", json={"address": "bc1qxyz", "feerateSatByte": 2})
+    assert r.status_code == 400 and "no channel" in r.json()["error"].lower(), r.text
+
+
+def test_endpoint_close_blocked_over_onion(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    r = c.post("/api/wallet/close", json={"address": "bc1qxyz", "feerateSatByte": 2},
+               headers={"host": "x.onion"})
+    assert r.status_code == 404, r.text
+
+
+# ---- incoming endpoint (receive-modal confirmation) -----------------------
+def test_endpoint_incoming_reports_paid(monkeypatch):
+    c, d = _client()
+    _set(monkeypatch, "phoenixd")
+    monkeypatch.setattr(d, "_wallet_or_error",
+                        lambda req: (_wallet({"/payments/incoming/HH": FakeResp(payload={"isPaid": True, "receivedSat": 30000})}), None))
+    r = c.get("/api/wallet/incoming/HH")
+    assert r.status_code == 200 and r.json() == {"paid": True, "receivedSat": 30000}, r.text
+
+
 if __name__ == "__main__":
     simple = [v for k, v in sorted(globals().items())
               if k.startswith("test_") and callable(v) and "monkeypatch" not in v.__code__.co_varnames]
