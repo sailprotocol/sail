@@ -9,11 +9,25 @@ commands for the operator to run.
 """
 from __future__ import annotations
 
-import getpass
 import os
 import pathlib
 import subprocess
 import sys
+
+
+def current_user() -> str:
+    """The OS user this process actually runs as.
+
+    Derive it from the *process owner* (getuid → passwd), NOT $USER: under sudo/su the USER
+    environment variable carries the invoking user (e.g. `rob`), which would bake the wrong
+    `User=` into the installed unit and run the service as the wrong account. pwd is Unix-only,
+    which is fine — hosting is Linux-only — but fall back to env/getuid if it's ever unavailable.
+    """
+    try:
+        import pwd  # Unix only
+        return pwd.getpwuid(os.getuid()).pw_name
+    except (ImportError, KeyError):  # pragma: no cover — non-Unix / uid not in passwd
+        return os.getenv("USER") or str(os.getuid())
 
 
 def repo_root() -> pathlib.Path:
@@ -32,7 +46,7 @@ def render_unit(user: str | None = None, workdir: str | None = None, uvicorn: st
                 env_file: str | None = None, port: str | None = None) -> str:
     """Fill the shipped template from the running environment (so the installed unit matches how
     this daemon is actually being run)."""
-    user = user or os.getenv("USER") or getpass.getuser()
+    user = user or current_user()
     workdir = workdir or str(repo_root())
     # the venv's uvicorn lives next to the python running us
     uvicorn = uvicorn or str(pathlib.Path(sys.executable).with_name("uvicorn"))

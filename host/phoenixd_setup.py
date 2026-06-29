@@ -143,7 +143,8 @@ def first_run(binary: pathlib.Path, timeout: float = 90.0) -> None:
 
 # --- systemd units (pure text; unit-tested) ---------------------------------
 def phoenixd_service_unit(binary: pathlib.Path, user: str | None = None) -> str:
-    user = user or os.getenv("USER", "")
+    from host.service_setup import current_user  # process owner, not $USER (sudo/su safe)
+    user = user or current_user()
     return (
         "[Unit]\n"
         "Description=phoenixd (SAIL host Lightning node)\n"
