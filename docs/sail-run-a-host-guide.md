@@ -61,7 +61,28 @@ sudo apt update && sudo apt install -y tor python3-venv python3-pip git
 
 ### Enable Tor's control port (required)
 
-The host creates its `.onion` service through Tor's control port. Enable it with cookie auth:
+The host creates its `.onion` service through Tor's control port. You need three directives in
+`/etc/tor/torrc` — but they must appear **exactly once**.
+
+> ⚠️ **Do not blindly append this block.** If `ControlPort 9051` is already in `torrc` and you add
+> it a second time, Tor gets **duplicate directives and fails to start entirely** (`Could not bind
+> ... Address already in use` → `Failed to bind one of the listener ports`). The failure is
+> deceptive: `systemctl is-active tor` still reports `active` (that's the multi-instance *master*,
+> not the real instance), nothing listens on 9051, and the daemon later dies with an opaque
+> `ConnectionRefusedError`. This was the single biggest time-sink in testing — follow the steps in
+> order and **verify** before moving on.
+
+**1. Check whether the control port is already configured:**
+
+```bash
+grep -nE '^\s*ControlPort\s+9051' /etc/tor/torrc
+```
+
+- **Prints a line** → it's already set. **Skip step 2.** Open `/etc/tor/torrc` and make sure each
+  of the three directives below appears only once (remove any duplicates), then go to step 3.
+- **Prints nothing** → add the block once, in step 2.
+
+**2. Add the directives (only if step 1 printed nothing):**
 
 ```bash
 sudo tee -a /etc/tor/torrc >/dev/null <<'EOF'
@@ -69,9 +90,42 @@ ControlPort 9051
 CookieAuthentication 1
 CookieAuthFileGroupReadable 1
 EOF
+```
+
+If you'd rather edit by hand (`sudo nano /etc/tor/torrc`), add those three lines once at the end —
+and confirm they aren't already present higher up the file.
+
+**3. Restart Tor and VERIFY the control port is actually listening:**
+
+On Ubuntu, `tor.service` is a multi-instance *master*; it being "active" tells you **nothing** about
+whether the control port came up. The real instance is `tor@default`.
+
+```bash
 sudo systemctl restart tor
-# Let the daemon's user read the auth cookie:
-sudo usermod -aG debian-tor "$USER"     # log out/in (or reboot) for the group to take effect
+sudo ss -ltnp | grep 9051        # MUST print a LISTEN line (127.0.0.1:9051). Empty = not up.
+```
+
+If `ss` prints nothing, the control port did not start — almost always duplicate directives. Find
+out why, fix `torrc`, restart, and re-check:
+
+```bash
+sudo journalctl -u tor@default -n 30 --no-pager   # look for "Address already in use" / "Failed to bind"
+```
+
+**Do not continue until `ss ... grep 9051` shows a LISTENer.**
+
+**4. Let the daemon read Tor's auth cookie — then RE-LOGIN (mandatory):**
+
+```bash
+sudo usermod -aG debian-tor "$USER"
+```
+
+> ⚠️ This does **not** apply to your current shell. You **must log out and back in** (or reboot) for
+> the group to take effect — otherwise the daemon can't read Tor's auth cookie and onion creation
+> fails. After re-login, verify:
+
+```bash
+groups | grep debian-tor         # must list "debian-tor"; if not, you haven't re-logged in yet
 ```
 
 ---
@@ -135,6 +189,13 @@ The wizard walks you through:
    seed **once** — write it down; it's your node's recovery.)
 5. **Go live** — renders and installs the systemd service so the host auto-restarts and
    survives reboot on the same `.onion` and pubkey.
+
+> **Restarting the wizard.** The wizard *is* the daemon — to restart it, just re-run the `uvicorn`
+> command above (Ctrl-C to stop it first if it's still running), then reopen
+> `http://localhost:8001/setup`. Your progress is written to `.env.host` as you go, so a restart
+> picks up where you left off. **Note:** on startup the daemon creates its onion, so it won't come
+> up until Tor's control port is ready — if it exits immediately, re-check the
+> [Tor control-port verify step](#enable-tors-control-port-required) (`ss ... grep 9051`).
 
 ---
 
@@ -213,9 +274,19 @@ inbound first.
 
 ## Troubleshooting
 
-- **Wizard won't create the onion / `TRANSPORT=tor` errors** → the daemon can't read Tor's
-  control cookie. Confirm the control port is enabled (step 1) and your user is in the
-  `debian-tor` group (`groups | grep debian-tor`); log out/in if you just added it.
+- **Daemon/wizard won't start, or `ConnectionRefusedError` / `TRANSPORT=tor` errors** → Tor's
+  control port isn't actually up. First verify: `sudo ss -ltnp | grep 9051` must show a LISTENer.
+  If it's empty, Tor didn't bind the control port — the usual cause is **duplicate directives** in
+  `/etc/tor/torrc` (the block was added more than once), which makes Tor fail to start *even though*
+  `systemctl is-active tor` says "active". Check `sudo journalctl -u tor@default -n 30 --no-pager`
+  for `Address already in use` / `Failed to bind`, remove the duplicate lines, `sudo systemctl
+  restart tor`, and re-run the `ss` check. See [Enable Tor's control port](#enable-tors-control-port-required).
+- **Wizard creates the onion but `groups` lacks `debian-tor`** → you added the group but haven't
+  re-logged in. `sudo usermod -aG debian-tor "$USER"` does not affect the current session — log out
+  and back in (or reboot), then confirm with `groups | grep debian-tor`.
+- **Wizard says "no NVIDIA GPU detected" but `nvidia-smi` works** → you likely installed the driver
+  without rebooting/relogging. The wizard reads the GPU at startup; reboot (or log out/in) after a
+  driver install, then re-run the daemon so it re-detects.
 - **`receivable: false` on phoenixd** → the channel cliff above; send the one-time inbound.
 - **Host doesn't appear in a client's `--list`** → confirm the daemon logged `accepted by N
   relay(s)`; relay propagation can lag a re-announce (every ~300s). Make sure your
