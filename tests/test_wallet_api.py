@@ -43,6 +43,13 @@ class FakeClient:
         self.routes = routes
 
     def get(self, path):
+        return self._route(path)
+
+    def post(self, path, data=None):
+        self.last_post = {"path": path, "data": data}
+        return self._route(path)
+
+    def _route(self, path):
         r = self.routes[path]
         if isinstance(r, Exception):
             raise r
@@ -169,6 +176,75 @@ def test_endpoint_channels_ok(monkeypatch):
                             {"channelId": "z", "type": "x.Normal", "balanceSat": 100, "inboundLiquiditySat": 200}])}), None))
     r = c.get("/api/wallet/channels")
     assert r.status_code == 200 and r.json()["canReceive"] is True, r.text
+
+
+# ---- PhoenixdWallet.receive ----------------------------------------------
+def test_receive_success_returns_bolt11():
+    w = _wallet({"/createinvoice": FakeResp(payload={"serialized": "lnbc300u1pxyz", "paymentHash": "hh"})})
+    out = w.receive(amount_sat=30000, description="fund")
+    assert out == {"bolt11": "lnbc300u1pxyz", "paymentHash": "hh",
+                   "amountSat": 30000, "description": "fund"}
+    assert w._client.last_post["data"]["amountSat"] == "30000"  # forwarded to phoenixd as a string
+
+
+def test_receive_no_amount_omits_amountsat():
+    fc = FakeClient({"/createinvoice": FakeResp(payload={"serialized": "lnbc1", "paymentHash": "h"})})
+    wallet.PhoenixdWallet(client=fc).receive(amount_sat=None)
+    assert "amountSat" not in fc.last_post["data"]  # any-amount invoice
+
+
+def test_receive_unreachable_raises():
+    w = _wallet({"/createinvoice": httpx.ConnectError("refused")})
+    try:
+        w.receive(amount_sat=1000)
+    except wallet.WalletError as e:
+        assert "unreachable" in str(e).lower(), e
+    else:
+        raise AssertionError("expected WalletError")
+
+
+# ---- receive endpoint: success (bolt11 + QR), validation, gates, surfacing -
+def test_endpoint_receive_success_has_bolt11_and_qr(monkeypatch):
+    c, d = _client()
+    _set(monkeypatch, "phoenixd")
+    monkeypatch.setattr(d, "_wallet_or_error",
+                        lambda req: (_wallet({"/createinvoice": FakeResp(payload={"serialized": "lnbcQR", "paymentHash": "p"})}), None))
+    r = c.post("/api/wallet/receive", json={"amountSat": 30000})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["bolt11"] == "lnbcQR"
+    assert j["qr"].startswith("data:image/svg"), j["qr"][:30]  # QR rendered locally via segno
+
+
+def test_endpoint_receive_rejects_bad_amount(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    for bad in ("abc", 0, -5):
+        r = c.post("/api/wallet/receive", json={"amountSat": bad})
+        assert r.status_code == 400, (bad, r.text)
+
+
+def test_endpoint_receive_blocked_over_onion(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    r = c.post("/api/wallet/receive", json={}, headers={"host": "zzz.onion"})
+    assert r.status_code == 404, r.text
+
+
+def test_endpoint_receive_requires_phoenixd(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "nwc")
+    r = c.post("/api/wallet/receive", json={})
+    assert r.status_code == 400 and "phoenixd" in r.json()["error"], r.text
+
+
+def test_endpoint_receive_surfaces_failure_as_502(monkeypatch):
+    c, d = _client()
+    _set(monkeypatch, "phoenixd")
+    monkeypatch.setattr(d, "_wallet_or_error",
+                        lambda req: (_wallet({"/createinvoice": httpx.ConnectError("refused")}), None))
+    r = c.post("/api/wallet/receive", json={"amountSat": 1000})
+    assert r.status_code == 502 and "unreachable" in r.json()["error"].lower(), r.text
 
 
 if __name__ == "__main__":

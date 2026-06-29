@@ -69,10 +69,30 @@ class PhoenixdWallet:
         return {"channels": out, "count": len(out), "inboundSat": inbound_total,
                 "outboundSat": outbound_total, "canReceive": inbound_total > 0}
 
+    # --- receive (fund / first-payment to auto-open the channel) -------------
+    def receive(self, amount_sat: int | None = None, description: str | None = None) -> dict:
+        """Mint a BOLT11 the operator (or their first customer) can pay. A first payment of
+        ~25-35k+ sat auto-opens the channel (pay-to-open) — phoenixd has no manual open. amountSat
+        optional (blank = any-amount invoice). Returns {bolt11, paymentHash, amountSat, description}."""
+        desc = (description or "SAIL host wallet").strip()
+        data = {"description": desc}
+        if amount_sat is not None:
+            data["amountSat"] = str(int(amount_sat))
+        j = self._post("/createinvoice", data)
+        return {"bolt11": j.get("serialized"), "paymentHash": j.get("paymentHash"),
+                "amountSat": amount_sat, "description": desc}
+
     # --- internals -----------------------------------------------------------
     def _get(self, path: str):
         try:
             r = self._client.get(path)
+        except httpx.HTTPError as e:
+            raise WalletError(f"phoenixd unreachable at {self._client.base_url}: {str(e)[:120]}") from e
+        return self._json(r, path)
+
+    def _post(self, path: str, data: dict):
+        try:
+            r = self._client.post(path, data=data)
         except httpx.HTTPError as e:
             raise WalletError(f"phoenixd unreachable at {self._client.base_url}: {str(e)[:120]}") from e
         return self._json(r, path)

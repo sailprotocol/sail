@@ -63,6 +63,12 @@
   .wallet .balnum .u{font-size:1rem; color:var(--muted); font-weight:600; margin-left:5px;}
   .wallet .balsub{font-size:0.82rem; color:var(--muted); margin-top:6px;}
   .wallet .cliff{margin-top:14px; border:1px solid rgba(247,147,26,0.35); background:rgba(247,147,26,0.07); border-radius:9px; padding:12px 14px; font-size:0.88rem; color:var(--fg);} .wallet .cliff b{color:var(--beacon-2);}
+  .wallet .wactions{display:flex; gap:12px; margin-top:16px; padding-top:16px; border-top:1px solid var(--line); flex-wrap:wrap;}
+  /* receive modal */
+  .qrbox{background:#fff; border-radius:11px; padding:14px; display:flex; justify-content:center; margin:4px 0 14px;}
+  .qrbox img{width:230px; height:230px; image-rendering:pixelated;}
+  .modal .cmd.wrap code{white-space:normal; word-break:break-all; overflow-x:visible;}
+  .rcverr{color:var(--bad); font-size:0.86rem; margin:0 0 12px; display:none;}
 </style>
 </head>
 <body>
@@ -125,6 +131,9 @@
     <div class="kv"><span class="key">Inbound · can receive</span><span class="val mono" id="w-inbound">—</span></div>
     <div class="kv"><span class="key">Outbound · can send</span><span class="val mono" id="w-outbound">—</span></div>
     <div class="cliff" id="w-cliff" style="display:none;"></div>
+    <div class="wactions">
+      <button class="btn primary" id="w-receive">Receive / fund</button>
+    </div>
   </div>
 
   <div class="grid2">
@@ -168,6 +177,26 @@
     <div class="danger-box"><b>Your sats are safe.</b> phoenixd funds and your 12-word recovery phrase stay in <span class="mono">~/.phoenix</span> — removing the service doesn't touch them.</div>
     <div class="typefield"><label>Type <span class="mono">remove</span> to confirm</label><input id="rm-input" type="text" autocomplete="off" spellcheck="false" placeholder="remove"></div>
     <div class="actions"><button class="btn" data-close>Cancel</button><button class="btn danger" id="rm-go" disabled>Stop &amp; remove</button></div>
+  </div>
+</div>
+
+<!-- Receive / fund (generate a BOLT11 + QR) -->
+<div class="scrim" id="m-receive">
+  <div class="modal">
+    <h3>Receive a payment</h3>
+    <p>Paying this invoice credits your wallet. Your <b>first payment of ~25–35k+ sat auto-opens your
+      channel</b> (phoenixd has no manual “open channel” step) — after that you can receive normally.</p>
+    <div class="typefield"><label>Amount in <span class="mono">sat</span> — blank for an any-amount invoice</label>
+      <input id="rcv-amt" type="number" min="1" inputmode="numeric" placeholder="30000" value="30000"></div>
+    <p class="rcverr" id="rcv-err"></p>
+    <div id="rcv-result" style="display:none;">
+      <div class="qrbox"><img id="rcv-qr" alt="invoice QR code"></div>
+      <div class="cmd wrap"><code id="rcv-bolt11"></code><button class="copy" id="rcv-copy">copy</button></div>
+    </div>
+    <div class="actions">
+      <button class="btn" data-close>Close</button>
+      <button class="btn primary" id="rcv-go">Generate invoice</button>
+    </div>
   </div>
 </div>
 
@@ -345,11 +374,40 @@ async function refreshWallet(payments){
     if(!ch.canReceive){
       cliff.style.display='';
       cliff.innerHTML = `<b>No inbound channel yet.</b> You need ~25–35k sat of inbound to receive payments. `
-        + `phoenixd has no manual “open channel” step — receiving your first payment auto-opens it `
-        + `(the Receive button lands in the next update).`;
+        + `phoenixd has no manual “open channel” step — use <b>Receive / fund</b> below to generate an `
+        + `invoice; paying it (~25–35k+ sat) auto-opens your channel.`;
     } else cliff.style.display='none';
   }
 }
+
+// ---- receive / fund flow ----
+$('w-receive').onclick = ()=>{
+  $('rcv-result').style.display='none'; $('rcv-err').style.display='none';
+  $('rcv-go').disabled=false; $('rcv-go').textContent='Generate invoice';
+  open('m-receive'); $('rcv-amt').focus();
+};
+$('rcv-go').onclick = async ()=>{
+  const raw=$('rcv-amt').value.trim();
+  const body={};
+  if(raw!==''){ body.amountSat = parseInt(raw,10); }
+  $('rcv-err').style.display='none';
+  $('rcv-go').disabled=true; $('rcv-go').textContent='Generating…';
+  let r=null;
+  try{ r = await (await fetch('/api/wallet/receive',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})).json(); }
+  catch{ r={error:'could not reach the host'}; }
+  if(!r || r.error){
+    $('rcv-err').textContent = (r&&r.error) || 'failed to generate invoice';
+    $('rcv-err').style.display='block';
+    $('rcv-go').disabled=false; $('rcv-go').textContent='Generate invoice';
+    return;
+  }
+  $('rcv-qr').src = r.qr || '';
+  $('rcv-bolt11').textContent = r.bolt11 || '';
+  $('rcv-copy').dataset.c = r.bolt11 || '';
+  $('rcv-result').style.display='';
+  $('rcv-go').disabled=false; $('rcv-go').textContent='New invoice';
+};
+$('rcv-copy').onclick = ()=>{ navigator.clipboard?.writeText($('rcv-copy').dataset.c||''); const b=$('rcv-copy'); b.textContent='copied'; setTimeout(()=>b.textContent='copy',1200); };
 
 $('copyonion').onclick = ()=>{ navigator.clipboard?.writeText($('copyonion').dataset.c||''); const b=$('copyonion'); b.textContent='copied'; setTimeout(()=>b.textContent='copy',1200); };
 $('runtest').onclick = async ()=>{

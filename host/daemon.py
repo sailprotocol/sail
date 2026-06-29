@@ -608,6 +608,46 @@ def wallet_channels(request: Request):
     return _wallet_call(request, lambda w: w.channels())
 
 
+def _qr_data_uri(text: str) -> str | None:
+    """Render a BOLT11 as an inline SVG data-URI QR with segno (already a repo dep). Generated
+    LOCALLY — no external QR service — so the wallet stays sovereign. Black-on-white for scanners."""
+    if not text:
+        return None
+    import segno
+    return segno.make(text, error="l").svg_data_uri(scale=4, border=3, dark="#000000", light="#ffffff")
+
+
+@app.post("/api/wallet/receive")
+async def wallet_receive(request: Request):
+    """Mint a BOLT11 to receive into the wallet (the 'fund me / auto-open my channel' invoice).
+    amountSat optional (blank = any-amount). Returns the invoice as copyable text + an inline QR."""
+    from host import wallet
+    w, err = _wallet_or_error(request)
+    if err is not None:
+        return err
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — empty/invalid body is fine; treat as no-amount invoice
+        body = {}
+    amount = body.get("amountSat")
+    if amount in ("", None):
+        amount = None
+    else:
+        try:
+            amount = int(amount)
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "amountSat must be a whole number of sats"}, status_code=400)
+        if amount < 1:
+            return JSONResponse({"error": "amountSat must be at least 1 sat"}, status_code=400)
+    description = (body.get("description") or "").strip() or None
+    try:
+        result = w.receive(amount_sat=amount, description=description)
+    except wallet.WalletError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    result["qr"] = _qr_data_uri(result.get("bolt11"))
+    return result
+
+
 # --- first-run setup wizard (LOCAL ONLY) ------------------------------------
 # Same local-only gate as the dashboard: these read hardware/config and WRITE .env.host + restart
 # the service, so they must never be reachable over the .onion. The wizard is host/static/wizard.html.
