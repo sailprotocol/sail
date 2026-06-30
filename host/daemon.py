@@ -722,6 +722,54 @@ def wallet_channels(request: Request):
     return _wallet_call(request, lambda w: w.channels())
 
 
+@operator_app.post("/api/wallet/decode-invoice")
+async def wallet_decode_invoice(request: Request):
+    """Decode a BOLT11's fixed amount locally (no external service) so the withdraw form can pre-fill
+    + lock the amount. Returns {amountSat, fixed}: fixed=true means the invoice sets the amount (lock
+    the field); fixed=false means a zero/any-amount invoice (operator enters the amount)."""
+    err = _wallet_gate(request)
+    if err is not None:
+        return err
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    from shared import bolt11
+    amount = bolt11.decode_amount_sat(body.get("invoice") or "")
+    return {"amountSat": amount, "fixed": amount is not None}
+
+
+@operator_app.get("/api/wallet/close-quote")
+def wallet_close_quote(request: Request):
+    """Estimate the on-chain fee + NET payout for closing at ?feerate=<sat/vByte>, with a dust flag,
+    so the operator sees the cost BEFORE confirming a close (and isn't left with dust)."""
+    from host import wallet
+    w, err = _wallet_or_error(request)
+    if err is not None:
+        return err
+    try:
+        feerate = int(request.query_params.get("feerate"))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "feerate must be a whole number (sat/vByte)"}, status_code=400)
+    if feerate < 1:
+        return JSONResponse({"error": "feerate must be at least 1"}, status_code=400)
+    try:
+        balance = w.channels()["outboundSat"]  # on-chain-sweepable channel balance
+    except wallet.WalletError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    return wallet.estimate_close_quote(balance, feerate)
+
+
+@operator_app.get("/api/wallet/feerate")
+def wallet_feerate(request: Request):
+    """A sane starting feerate (sat/vByte) to prefill the close form (editable by the operator)."""
+    err = _wallet_gate(request)
+    if err is not None:
+        return err
+    from host import wallet
+    return {"feerateSatByte": wallet.suggested_feerate(), "source": "default"}
+
+
 def _qr_data_uri(text: str) -> str | None:
     """Render a BOLT11 as an inline SVG data-URI QR with segno (already a repo dep). Generated
     LOCALLY — no external QR service — so the wallet stays sovereign. Black-on-white for scanners."""

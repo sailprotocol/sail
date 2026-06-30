@@ -71,8 +71,12 @@
   .qrbox img{width:230px; height:230px; image-rendering:pixelated;}
   .modal .cmd.wrap code{white-space:normal; word-break:break-all; overflow-x:visible;}
   .rcverr{color:var(--bad); font-size:0.86rem; margin:0 0 12px; display:none;}
-  .okbox{border:1px solid var(--good); background:var(--good-bg); color:var(--good); border-radius:9px; padding:12px 14px; font-size:0.9rem; margin-bottom:6px;} .okbox b{color:#7fd29a;}
+  .okbox{border:1px solid var(--good); background:var(--good-bg); color:var(--good); border-radius:9px; padding:12px 14px; font-size:0.9rem; margin-bottom:6px; overflow-wrap:anywhere; word-break:break-word;} .okbox b{color:#7fd29a;} .okbox .mono{word-break:break-all;}
   .rcvdone{border:1px solid var(--good); background:var(--good-bg); border-radius:11px; padding:18px; text-align:center; margin-bottom:12px;} .rcvdone .big{font-family:'Bricolage Grotesque'; font-weight:800; font-size:1.3rem; color:var(--good);}
+  .quote{border:1px solid var(--line); background:var(--ink-3); border-radius:9px; padding:11px 13px; font-size:0.86rem; margin-bottom:12px;}
+  .quote .qrow{display:flex; justify-content:space-between; gap:12px; padding:2px 0;} .quote .qrow .mono{color:var(--fg);}
+  .quote.dust{border-color:rgba(247,147,26,0.45); background:rgba(247,147,26,0.08);} .quote .warn{color:var(--beacon-2); margin-top:7px;}
+  .muted{color:var(--muted); font-size:0.82rem;}
   /* seed grid */
   .seedgrid{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:6px 0 4px;}
   @media (max-width:520px){ .seedgrid{grid-template-columns:repeat(2,1fr);} }
@@ -238,10 +242,10 @@
     <h3>Withdraw via Lightning</h3>
     <p>Paste an external Lightning invoice (BOLT11). phoenixd pays it from your balance — this is irreversible.</p>
     <div class="typefield"><label>Lightning invoice (<span class="mono">lnbc…</span>)</label><input id="wd-inv" type="text" autocomplete="off" spellcheck="false" placeholder="lnbc…"></div>
-    <div class="typefield"><label>Amount in <span class="mono">sat</span> — only for an any-amount invoice (blank otherwise)</label><input id="wd-amt" type="number" min="1" inputmode="numeric" placeholder=""></div>
+    <div class="typefield"><label>Amount in <span class="mono">sat</span> <span id="wd-amthint" class="muted"></span></label><input id="wd-amt" type="number" min="1" inputmode="numeric" placeholder="enter amount"></div>
     <p class="rcverr" id="wd-err"></p>
     <div id="wd-ok" class="okbox" style="display:none;"></div>
-    <div class="actions"><button class="btn" data-close>Cancel</button><button class="btn primary" id="wd-go">Review &amp; send</button></div>
+    <div class="actions"><button class="btn" data-close id="wd-cancel">Cancel</button><button class="btn primary" id="wd-go">Review &amp; send</button></div>
   </div>
 </div>
 
@@ -252,9 +256,10 @@
     <div class="danger-box"><b>Withdraw your Lightning balance first.</b> Closing sweeps only the on-chain remainder to the address below, closes your channel, and is irreversible — receiving again later needs a new channel.</div>
     <div class="typefield"><label>Destination BTC address (on-chain)</label><input id="cl-addr" type="text" autocomplete="off" spellcheck="false" placeholder="bc1…"></div>
     <div class="typefield"><label>Fee rate (<span class="mono">sat/vByte</span>) — check a mempool fee estimator</label><input id="cl-fee" type="number" min="1" inputmode="numeric" placeholder="e.g. 2"></div>
+    <div id="cl-quote" class="quote" style="display:none;"></div>
     <p class="rcverr" id="cl-err"></p>
     <div id="cl-ok" class="okbox" style="display:none;"></div>
-    <div class="actions"><button class="btn" data-close>Cancel</button><button class="btn danger" id="cl-go">Review close</button></div>
+    <div class="actions"><button class="btn" data-close id="cl-cancel">Cancel</button><button class="btn danger" id="cl-go">Review close</button></div>
   </div>
 </div>
 
@@ -520,11 +525,25 @@ function hideSeed(){ $('seed-grid').classList.add('blurred'); $('seed-reveal').t
 $('seed-copy').onclick = ()=>{ navigator.clipboard?.writeText($('seed-copy').dataset.c||''); const b=$('seed-copy'); b.textContent='copied — write it on paper, then clear your clipboard'; setTimeout(()=>b.textContent='Copy',2200); };
 
 // ---- withdraw (pay an external invoice) — two-step confirm ----
-let wdArmed=false;
-$('w-withdraw').onclick = ()=>{ $('wd-inv').value=''; $('wd-amt').value=''; $('wd-err').style.display='none';
+let wdArmed=false, wdDecodeTimer=null;
+function wdResetAmount(){ $('wd-amt').value=''; $('wd-amt').disabled=false; $('wd-amthint').textContent=''; }
+$('w-withdraw').onclick = ()=>{ $('wd-inv').value=''; wdResetAmount(); $('wd-err').style.display='none';
   $('wd-ok').style.display='none'; wdArmed=false; $('wd-go').textContent='Review & send'; $('wd-go').disabled=false;
+  $('wd-go').style.display=''; $('wd-cancel').textContent='Cancel';
   open('m-withdraw'); $('wd-inv').focus(); };
-$('wd-inv').addEventListener('input',()=>{ wdArmed=false; $('wd-go').textContent='Review & send'; });
+$('wd-inv').addEventListener('input',()=>{
+  wdArmed=false; $('wd-go').textContent='Review & send';
+  // Decode the pasted invoice: a fixed-amount invoice fills + locks the amount (you can't change it);
+  // a zero/any-amount invoice leaves it editable. Decoded locally on the host (no external service).
+  if(wdDecodeTimer) clearTimeout(wdDecodeTimer);
+  const inv=$('wd-inv').value.trim();
+  if(!inv){ wdResetAmount(); return; }
+  wdDecodeTimer=setTimeout(async ()=>{
+    let r=null; try{ r=await (await fetch('/api/wallet/decode-invoice',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({invoice:inv})})).json(); }catch{ return; }
+    if(r && r.fixed){ $('wd-amt').value=r.amountSat; $('wd-amt').disabled=true; $('wd-amthint').textContent='— set by the invoice'; }
+    else { $('wd-amt').disabled=false; $('wd-amthint').textContent='— any-amount invoice: enter how much to send'; }
+  }, 250);
+});
 $('wd-go').onclick = async ()=>{
   const inv=$('wd-inv').value.trim();
   if(!inv){ $('wd-err').textContent='paste a Lightning invoice first'; $('wd-err').style.display='block'; return; }
@@ -538,15 +557,43 @@ $('wd-go').onclick = async ()=>{
   if(!r || r.error){ $('wd-err').textContent=(r&&r.error)||'payment failed'; $('wd-err').style.display='block';
     wdArmed=false; $('wd-go').disabled=false; $('wd-go').textContent='Review & send'; return; }
   $('wd-ok').innerHTML = `<b>✓ Sent ${num(r.recipientAmountSat||0)} sat</b>${r.routingFeeSat?` · routing fee ${num(r.routingFeeSat)} sat`:''}`;
-  $('wd-ok').style.display=''; $('wd-go').style.display='none'; refresh();
+  $('wd-ok').style.display=''; $('wd-go').style.display='none'; $('wd-cancel').textContent='Done'; refresh();  // nothing left to cancel
 };
 
-// ---- close & sweep — two-step confirm ----
-let clArmed=false;
-$('w-close').onclick = ()=>{ $('cl-addr').value=''; $('cl-fee').value=''; $('cl-err').style.display='none';
-  $('cl-ok').style.display='none'; clArmed=false; $('cl-go').style.display=''; $('cl-go').textContent='Review close'; $('cl-go').disabled=false;
-  open('m-close'); $('cl-addr').focus(); };
+// ---- close & sweep — two-step confirm, with fee/net preview + dust guard ----
+let clArmed=false, clQuoteTimer=null;
+// A close lags in phoenixd (the channel goes ShuttingDown→Closing before getbalance drops), so a
+// single refresh can read the pre-close balance. Re-poll for a window so the card converges to
+// 0 / no-channel once the sweep registers. (The 5s loop continues independently.)
+function refreshSoon(){ refresh(); [2000,5000,10000,20000,40000].forEach(t=>setTimeout(refresh,t)); }
+$('w-close').onclick = async ()=>{ $('cl-addr').value=''; $('cl-fee').value=''; $('cl-err').style.display='none';
+  $('cl-quote').style.display='none'; $('cl-ok').style.display='none'; clArmed=false; $('cl-go').style.display='';
+  $('cl-go').textContent='Review close'; $('cl-go').disabled=false; $('cl-cancel').textContent='Cancel';
+  open('m-close'); $('cl-addr').focus();
+  // Prefill a sane starting feerate (editable) so the operator isn't guessing from nothing; the
+  // input event triggers the fee/net quote immediately.
+  try{ const f=await (await fetch('/api/wallet/feerate')).json();
+    if(f && f.feerateSatByte){ $('cl-fee').value=f.feerateSatByte; $('cl-fee').dispatchEvent(new Event('input')); } }catch{}
+};
 ['cl-addr','cl-fee'].forEach(id=>$(id).addEventListener('input',()=>{ clArmed=false; $('cl-go').textContent='Review close'; }));
+// Show the estimated on-chain fee + NET payout (and a dust warning) BEFORE confirming, so the
+// operator never closes blind into dust. Re-quote as the feerate changes.
+$('cl-fee').addEventListener('input',()=>{
+  if(clQuoteTimer) clearTimeout(clQuoteTimer);
+  const fee=parseInt($('cl-fee').value.trim(),10);
+  if(!(fee>=1)){ $('cl-quote').style.display='none'; return; }
+  clQuoteTimer=setTimeout(async ()=>{
+    let q=null; try{ q=await (await fetch('/api/wallet/close-quote?feerate='+fee)).json(); }catch{ return; }
+    if(!q || q.error){ $('cl-quote').style.display='none'; return; }
+    $('cl-quote').className='quote'+(q.dust?' dust':'');
+    $('cl-quote').innerHTML =
+      `<div class="qrow"><span>Channel balance</span><span class="mono">${num(q.balanceSat)} sat</span></div>`+
+      `<div class="qrow"><span>Est. on-chain fee <span class="muted">(~${q.estVsize} vB × ${q.feerateSatByte})</span></span><span class="mono">~${num(q.feeSat)} sat</span></div>`+
+      `<div class="qrow"><span><b>You'd receive (net)</b></span><span class="mono"><b>~${num(q.netSat)} sat</b></span></div>`+
+      (q.dust?`<div class="warn">⚠ ${q.detail}</div>`:`<div class="muted" style="margin-top:6px;">Estimate — actual fee is set by Bitcoin network conditions.</div>`);
+    $('cl-quote').style.display='';
+  }, 250);
+});
 $('cl-go').onclick = async ()=>{
   const addr=$('cl-addr').value.trim(), fee=$('cl-fee').value.trim();
   if(!addr){ $('cl-err').textContent='enter a destination BTC address'; $('cl-err').style.display='block'; return; }
@@ -561,7 +608,8 @@ $('cl-go').onclick = async ()=>{
     clArmed=false; $('cl-go').disabled=false; $('cl-go').textContent='Review close'; return; }
   const tx=(r.closed&&r.closed[0]&&r.closed[0].closingTxId)||'';
   $('cl-ok').innerHTML = `<b>✓ Closing ${r.count} channel(s)</b> — sweeping on-chain to your address.`+(tx?`<br>txid: <span class="mono">${tx}</span>`:'');
-  $('cl-ok').style.display=''; $('cl-go').style.display='none'; refresh();
+  $('cl-ok').style.display=''; $('cl-go').style.display='none'; $('cl-cancel').textContent='Done';
+  refreshSoon();  // converge the card to 0 / no-channel as the close settles in phoenixd
 };
 
 $('copyonion').onclick = ()=>{ navigator.clipboard?.writeText($('copyonion').dataset.c||''); const b=$('copyonion'); b.textContent='copied'; setTimeout(()=>b.textContent='copy',1200); };
