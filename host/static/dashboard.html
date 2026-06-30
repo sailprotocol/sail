@@ -65,6 +65,7 @@
   .wallet .cliff{margin-top:14px; border:1px solid rgba(247,147,26,0.35); background:rgba(247,147,26,0.07); border-radius:9px; padding:12px 14px; font-size:0.88rem; color:var(--fg);} .wallet .cliff b{color:var(--beacon-2);}
   .wallet .cliff.soft{border-color:var(--line); background:var(--ink-3);} .wallet .cliff.soft b{color:var(--fg);}
   .wallet .wactions{display:flex; gap:12px; margin-top:16px; padding-top:16px; border-top:1px solid var(--line); flex-wrap:wrap;}
+  .wallet .wallethelp{margin:12px 0 0; font-size:0.82rem;} .wallet .wallethelp a{color:var(--muted);} .wallet .wallethelp a:hover{color:var(--beacon);}
   /* receive modal */
   .qrbox{background:#fff; border-radius:11px; padding:14px; display:flex; justify-content:center; margin:4px 0 14px;}
   .qrbox img{width:230px; height:230px; image-rendering:pixelated;}
@@ -146,6 +147,7 @@
       <button class="btn ghost" id="w-backup">Back up wallet</button>
       <button class="btn danger" id="w-close">Close &amp; sweep…</button>
     </div>
+    <p class="wallethelp"><a href="https://github.com/sailprotocol/sail/blob/master/docs/sail-payments-explainer.md" target="_blank" rel="noopener">How does this work? Pay-to-open, fees, seed &amp; withdrawals →</a></p>
   </div>
 
   <div class="grid2">

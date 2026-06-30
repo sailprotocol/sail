@@ -221,6 +221,9 @@ The wizard walks you through:
 5. **Go live** — renders and installs the systemd service so the host auto-restarts and
    survives reboot on the same `.onion` and pubkey.
 
+> **How payments work** (pay-to-open channels, fees, your recovery seed, withdraw, close/sweep, and
+> the local-only wallet boundary): see [How payments work on your SAIL host](./sail-payments-explainer.md).
+
 > **Restarting the wizard.** The wizard *is* the daemon — to restart it, just re-run the `uvicorn`
 > command above (Ctrl-C to stop it first if it's still running), then reopen
 > `http://localhost:8090/setup`. Your progress is written to `.env.host` as you go, so a restart
