@@ -684,6 +684,47 @@ def test_endpoint_close_quote_blocked_over_onion(monkeypatch):
     assert r.status_code == 404, r.text
 
 
+# ---- wallet surface is PHOENIXD-ONLY (absent for lnd/nwc) ------------------
+_WALLET_ROUTES = [
+    ("GET", "/api/wallet/balance"),
+    ("GET", "/api/wallet/channels"),
+    ("GET", "/api/wallet/incoming/HH"),
+    ("GET", "/api/wallet/close-quote?feerate=2"),
+    ("GET", "/api/wallet/feerate"),
+    ("POST", "/api/wallet/receive"),
+    ("POST", "/api/wallet/decode-invoice"),
+    ("POST", "/api/wallet/seed"),
+    ("POST", "/api/wallet/pay"),
+    ("POST", "/api/wallet/close"),
+]
+
+
+def test_every_wallet_endpoint_400s_for_lnd_and_nwc(monkeypatch):
+    """The wallet surface only makes sense for phoenixd. For LND/NWC every wallet endpoint must
+    refuse with 400 (so the card can't function / return data), not 200 or 404."""
+    c, _ = _client()
+    for rail in ("lnd", "nwc"):
+        _set(monkeypatch, rail)
+        for method, path in _WALLET_ROUTES:
+            r = c.get(path) if method == "GET" else c.post(path, json={})
+            assert r.status_code == 400, (rail, method, path, r.status_code, r.text)
+            assert "phoenixd" in r.json().get("error", "").lower(), (rail, path, r.text)
+
+
+def test_dashboard_wallet_card_is_phoenixd_gated():
+    """Template guard: the wallet card is hidden by default and only shown for phoenixd; the LND/NWC
+    alt note exists; and /api/wallet/* is never fetched before the phoenixd gate (no calls for
+    non-phoenixd rails)."""
+    html = (pathlib.Path(__file__).resolve().parent.parent / "host/static/dashboard.html").read_text()
+    assert 'id="walletcard" style="display:none;"' in html  # absent until shown
+    assert 'id="walletalt"' in html                          # LND/NWC explanation element
+    assert "payments!=='phoenixd'" in html                   # the gate
+    # the first /api/wallet/* fetch must come AFTER the gate's early return
+    gate = html.index("payments!=='phoenixd'")
+    first_fetch = html.index("/api/wallet/balance")
+    assert gate < first_fetch, "wallet endpoints must only be called after the phoenixd gate"
+
+
 if __name__ == "__main__":
     simple = [v for k, v in sorted(globals().items())
               if k.startswith("test_") and callable(v) and "monkeypatch" not in v.__code__.co_varnames]

@@ -154,6 +154,9 @@
     <p class="wallethelp"><a href="https://github.com/sailprotocol/sail/blob/master/docs/sail-payments-explainer.md" target="_blank" rel="noopener">How does this work? Pay-to-open, fees, seed &amp; withdrawals →</a></p>
   </div>
 
+  <!-- Shown for LND/NWC instead of the wallet card: those funds live in the operator's own node/wallet -->
+  <div class="card walletalt" id="walletalt" style="display:none;"></div>
+
   <div class="grid2">
     <div class="card">
       <h3>Compute &amp; model</h3>
@@ -377,6 +380,9 @@ function finalize(action,target){
   if(action==='resume'){ intent=null; setMode('resuming'); refresh(); }
 }
 
+// Friendly payout-rail labels (the wallet card is phoenixd-only; LND/NWC funds live elsewhere).
+const RAILLABEL = {phoenixd:'phoenixd · self-custodial', lnd:'your own LND node', nwc:'connected wallet (NWC)', mock:'mock (setup)'};
+
 async function refresh(){
   let d;
   try{ d = await (await fetch('/api/status')).json(); }
@@ -392,11 +398,13 @@ async function refresh(){
   intent=null; if(mode!=='live'){ mode='live'; $('hero').className='hero'; renderControls('live'); }
   $('led').className='led ok';
   $('hstate').textContent = "You're hosting";
-  const cliff = d.receivable === false;  // phoenixd has no inbound channel yet -> can't be paid
+  // The channel-cliff warning is phoenixd-only (LND/NWC have no SAIL-managed channel).
+  const cliff = d.payments==='phoenixd' && d.receivable === false;
   $('hsub').innerHTML = `<b style="color:var(--beacon-2)">${d.alias_label||''}</b> · serving ${d.model} over ${d.transport} · up ${fmtUptime(d.uptime_s)}`
     + (cliff ? ` · <span style="color:var(--bad)" title="${(d.receive_detail||'').replace(/"/g,'')}">⚠ can’t receive yet — open a channel (~25–35k sat inbound)</span>` : '');
-  $('t-rail').textContent = d.payments;
-  $('c-rail').innerHTML = cliff ? `${d.payments} — <span style="color:var(--bad)">no channel yet</span>` : d.payments;
+  const railName = RAILLABEL[d.payments] || d.payments;
+  $('t-rail').textContent = railName;
+  $('c-rail').innerHTML = cliff ? `${railName} — <span style="color:var(--bad)">no channel yet</span>` : railName;
   $('t-pub').textContent = (d.pubkey||'').slice(0,8)+'…';
   $('pubfull').textContent = (d.pubkey||'').slice(0,8)+'…'+(d.pubkey||'').slice(-6);
   $('onion').textContent = d.onion; $('copyonion').dataset.c = d.onion;
@@ -415,10 +423,25 @@ async function refresh(){
   refreshWallet(d.payments);
 }
 
-// ---- wallet (phoenixd only) ----
+// ---- wallet (PHOENIXD ONLY) ----
+// The wallet card + all its actions only make sense for phoenixd (SAIL provisions + manages that
+// node). For LND/NWC the operator manages funds in their own node/wallet, so we HIDE the card
+// entirely (no calls to /api/wallet/*, which 400 for non-phoenixd anyway) and show a short note
+// pointing them where their funds actually live. mock/setup shows neither.
 async function refreshWallet(payments){
-  const card=$('walletcard');
-  if(payments!=='phoenixd'){ card.style.display='none'; return; }
+  const card=$('walletcard'), alt=$('walletalt');
+  if(payments!=='phoenixd'){
+    card.style.display='none';
+    if(payments==='lnd' || payments==='nwc'){
+      alt.style.display='';
+      const where = payments==='lnd' ? 'your own LND node' : 'your connected wallet (NWC)';
+      alt.innerHTML = `<h3>Wallet</h3><p class="docs" style="margin-top:0">Payouts go to <b>${where}</b> — `
+        + `manage your balance and withdrawals there. SAIL never custodies your funds, so there's no `
+        + `SAIL wallet to show here.</p>`;
+    } else { alt.style.display='none'; }  // mock / not-yet-set-up: no wallet surface at all
+    return;  // never call /api/wallet/* when the rail isn't phoenixd
+  }
+  alt.style.display='none';
   card.style.display='';
   let bal=null, ch=null;
   try{ bal = await (await fetch('/api/wallet/balance')).json(); }catch{}
