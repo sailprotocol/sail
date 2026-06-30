@@ -61,9 +61,7 @@ class _FakeClient:
 
 
 def _phoenixd_with(routes) -> PhoenixdLightning:
-    p = object.__new__(PhoenixdLightning)  # skip __init__ (needs real env + httpx.Client)
-    p._client = _FakeClient(routes)
-    return p
+    return PhoenixdLightning(client=_FakeClient(routes))  # injected client; _conn returns it as-is
 
 
 def test_base_and_mock_are_always_receivable():
@@ -119,6 +117,32 @@ def test_phoenixd_unreachable_is_unknown_not_false():
     st = p.receive_status()
     assert st["receivable"] is None, st          # unknown, NOT a false "can't receive"
     assert "unreachable" in st["detail"].lower(), st
+
+
+def test_phoenixd_reresolves_password_on_wallet_change(monkeypatch):
+    # The go-live 401 bug: _ln cached a stale password from construction time. _conn must re-resolve
+    # from phoenix.conf each call and rebuild the client when the password changes (wallet swap).
+    from host import payments, phoenixd_setup
+    built = []
+
+    class _OkResp:
+        status_code = 200
+        def json(self): return {}
+
+    class _FC:
+        def __init__(self, base_url=None, auth=None, timeout=None):
+            built.append(auth[1])  # record the password each client was built with
+        def get(self, path): return _OkResp()
+        def close(self): pass
+
+    monkeypatch.setattr(payments.httpx, "Client", _FC)
+    pw = {"v": "pw1"}
+    monkeypatch.setattr(phoenixd_setup, "resolve_api_password", lambda: pw["v"])
+    ln = payments.PhoenixdLightning()
+    assert ln.ping()[0] is True and built == ["pw1"]
+    ln.ping(); assert built == ["pw1"]          # same password -> reuse, no rebuild
+    pw["v"] = "pw2"                              # wallet changed (import/restore)
+    ln.ping(); assert built == ["pw1", "pw2"]   # self-heals to the new password
 
 
 def test_api_status_carries_receivable():

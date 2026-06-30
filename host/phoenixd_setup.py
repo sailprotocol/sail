@@ -307,9 +307,9 @@ def wallet_funded_status() -> tuple[bool | None, str]:
     if not is_provisioned():
         return (False, "no wallet present")
     try:
-        pw = read_http_password()
+        pw = resolve_api_password()  # phoenix.conf is the source of truth (same as every client)
     except Exception:  # noqa: BLE001
-        return (None, "wallet present but phoenix.conf unreadable")
+        return (None, "wallet present but API password unresolvable")
     base = os.getenv("PHOENIXD_API_URL", "http://127.0.0.1:9740").rstrip("/")
     try:
         c = httpx.Client(base_url=base, auth=("", pw), timeout=8.0)

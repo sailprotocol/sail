@@ -481,11 +481,19 @@ async function goLive(){
 }
 async function pollLive(){
   // Only declare live when the daemon responds AND the payment API is ready (host is payable).
+  let authFails=0;  // consecutive payment-auth failures (401) — bail instead of spinning 5 min
   for(let i=0;i<150;i++){           // ~5 min budget
     await new Promise(r=>setTimeout(r,2000));
     let st=null; try{ st=await api('/api/status'); }catch{ continue; }
     if(st && !st.error && st.state==='live' && st.payments_ready){ return liveDone(st); }
-    if(st && !st.error && st.state==='live'){ $('busyt').textContent='Daemon up — waiting on the payment backend…'; $('busyd').textContent=st.payments_detail||''; }
+    if(st && !st.error && st.state==='live'){
+      const detail=st.payments_detail||'';
+      $('busyt').textContent='Daemon up — waiting on the payment backend…'; $('busyd').textContent=detail;
+      // An auth failure won't fix itself by waiting — give it a short grace period (cache TTL /
+      // service restart can clear a transient one), then surface the real cause and stop.
+      if(/401|auth/i.test(detail)){ if(++authFails>=20){ $('busyt').textContent='Payment backend auth failed'; return liveDone(st); } }
+      else authFails=0;
+    }
   }
   // daemon up but payments never came ready: don't claim "live" — say what's wrong
   let st=null; try{ st=await api('/api/status'); }catch{}

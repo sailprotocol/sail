@@ -245,7 +245,7 @@ def test_import_seed_replace_aborts_if_phoenixd_wont_stop(tmp_path, monkeypatch)
 def test_wallet_funded_status(monkeypatch):
     import httpx
     monkeypatch.setattr(ps, "is_provisioned", lambda: True)
-    monkeypatch.setattr(ps, "read_http_password", lambda: "pw")
+    monkeypatch.setattr(ps, "resolve_api_password", lambda: "pw")  # source-of-truth resolver
 
     class FakeResp:
         def __init__(self, payload): self.status_code = 200; self._p = payload

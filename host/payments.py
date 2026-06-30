@@ -144,43 +144,64 @@ class PhoenixdLightning(LightningBackend):
       PHOENIXD_API_PASSWORD  the http-password from ~/.phoenix/phoenix.conf (secret)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, client: httpx.Client | None = None) -> None:
+        self._base = os.getenv("PHOENIXD_API_URL", "http://127.0.0.1:9740").rstrip("/")
+        # Build the client LAZILY and re-resolve the password each call (see _conn): the active
+        # wallet's password lives in phoenix.conf and changes on import/restore/re-provision, so a
+        # password captured at construction (e.g. when ~/.phoenix didn't exist yet) would go stale
+        # and 401. Never cache the password from one point in time. A client passed in (tests) is
+        # used as-is and never rebuilt.
+        self._client: httpx.Client | None = client
+        self._injected = client is not None
+        self._pw: str | None = None
+
+    def _conn(self) -> httpx.Client:
+        """Return a client whose auth is the CURRENT phoenix.conf password (resolve_api_password).
+        Rebuilds only when the password actually changes — so a wallet swap self-heals, no leak."""
+        if self._injected:
+            return self._client
         from host import phoenixd_setup  # local import (platform glue) — avoids an import cycle
-        base = os.getenv("PHOENIXD_API_URL", "http://127.0.0.1:9740").rstrip("/")
-        # Source of truth is phoenix.conf (resolve_api_password), so the password can't drift from
-        # the active wallet on import/restore/re-provision. PHOENIXD_API_PASSWORD is only a fallback.
-        password = phoenixd_setup.resolve_api_password()
-        # Basic auth, empty username + the http-password (phoenixd's scheme). localhost -> fast.
-        self._client = httpx.Client(base_url=base, auth=("", password), timeout=10.0)
+        pw = phoenixd_setup.resolve_api_password()  # phoenix.conf first; env only as remote fallback
+        if self._client is None or pw != self._pw:
+            if self._client is not None:
+                self._client.close()
+            self._client = httpx.Client(base_url=self._base, auth=("", pw), timeout=10.0)
+            self._pw = pw
+        return self._client
 
     def create_invoice(self, amount_msat: int, expiry_seconds: int | None = None) -> tuple[str, str]:
         data = {"amountSat": str(_whole_sats(amount_msat)), "description": "SAIL inference"}
         if expiry_seconds is not None:
             data["expirySeconds"] = str(expiry_seconds)
         try:
-            r = self._client.post("/createinvoice", data=data)
+            r = self._conn().post("/createinvoice", data=data)
         except httpx.HTTPError as e:
-            raise RuntimeError(f"phoenixd unreachable at {self._client.base_url}: {e}") from e
+            raise RuntimeError(f"phoenixd unreachable at {self._base}: {e}") from e
         r.raise_for_status()
         j = r.json()
         return j["serialized"], j["paymentHash"]  # serialized = BOLT11
 
     def is_settled(self, payment_hash_hex: str) -> bool:
         try:
-            r = self._client.get(f"/payments/incoming/{payment_hash_hex}")
-        except httpx.HTTPError:
-            return False  # phoenixd not ready / unreachable -> treat as unpaid
+            r = self._conn().get(f"/payments/incoming/{payment_hash_hex}")
+        except (httpx.HTTPError, RuntimeError):
+            return False  # phoenixd not ready / unreachable / no password yet -> treat as unpaid
         if r.status_code != 200:
             return False  # unknown hash or error -> unpaid
         return bool(r.json().get("isPaid"))
 
     def ping(self) -> tuple[bool, str]:
         try:
-            r = self._client.get("/getinfo")
+            r = self._conn().get("/getinfo")
+        except RuntimeError as e:
+            return False, f"phoenixd auth not available: {str(e)[:80]}"
         except httpx.HTTPError as e:
             return False, f"phoenixd unreachable: {str(e)[:80]}"
-        return (r.status_code == 200, "phoenixd ok" if r.status_code == 200
-                else f"phoenixd HTTP {r.status_code}")
+        if r.status_code == 200:
+            return True, "phoenixd ok"
+        if r.status_code == 401:  # actionable: the API password is wrong for the active wallet
+            return False, "phoenixd auth failed (HTTP 401) — wrong API password for this wallet"
+        return False, f"phoenixd HTTP {r.status_code}"
 
     def receive_status(self) -> dict:
         """The channel cliff: phoenixd can't RECEIVE until an inbound channel exists. A brand-new
@@ -188,10 +209,10 @@ class PhoenixdLightning(LightningBackend):
         so it can't be paid until ~25-35k sat opens one. Detect that and report it so go-live /
         the dashboard don't claim 'live to earn' when the host silently can't earn."""
         try:
-            r = self._client.get("/listchannels")
+            r = self._conn().get("/listchannels")
             r.raise_for_status()
             channels = r.json()
-        except (httpx.HTTPError, ValueError) as e:
+        except (httpx.HTTPError, ValueError, RuntimeError) as e:
             return {"receivable": None, "detail": f"phoenixd unreachable: {str(e)[:80]}"}
         channels = channels if isinstance(channels, list) else []
         # phoenixd reports the channel state in "type" as a fully-qualified lightning-kmp class
@@ -206,7 +227,7 @@ class PhoenixdLightning(LightningBackend):
 
         balance_sat = fee_credit_sat = None
         try:
-            b = self._client.get("/getbalance")
+            b = self._conn().get("/getbalance")
             if b.status_code == 200:
                 j = b.json()
                 balance_sat, fee_credit_sat = j.get("balanceSat"), j.get("feeCreditSat")
