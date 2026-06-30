@@ -130,6 +130,32 @@ ships in v0.2. These are once-per-setup niceties, not blockers — defer:
 - **Word autocomplete.** Dropdown suggestions from the 2048-word BIP39 list (`shared/bip39.py`) as
   the operator types each word, to prevent typos.
 
+## Security review (before broad launch)
+Before opening the host program to external operators, do a focused security review of the
+money-handling and exposure surfaces — this gates broad launch:
+- **Wallet exposure.** Confirm the operator surface (dashboard, wizard, all `/api/wallet/*` +
+  `/api/setup/*`) is physically off the Tor onion (separate localhost-only port), with the
+  Host-header gate as defense-in-depth; `/api/wallet/seed`, `/pay`, `/close` must never be onion-reachable.
+- **Key/seed material at rest.** phoenixd `seed.dat` + `phoenix.conf` (0600), the onion key, the host
+  `nsec` — verify perms and that none leak to logs, relays, or `.env` copies. (API password is read
+  live from `phoenix.conf`, never copied.)
+- **Payment path.** L402 metering can't over-charge or pay-then-serve-nothing; bound the known
+  manual-pay no-refund gap; no secret/preimage leakage.
+- **Lifecycle / DoS.** Single-instance + onion-collision guards don't open a new failure mode;
+  resource bounds on inference/session state.
+- **Moderation seam (non-negotiable).** CSAM image gate fail-closed + model allowlist intact.
+- Run the `/security-review` pass over the diff; engage an external reviewer if budget allows.
+
+## Future work
+- **Packaged host app (deferred).** Hosting today is the install script + browser wizard +
+  dashboard. A one-click packaged host app (AppImage/`.deb`, or a "Host" view in the desktop app)
+  is deferred — ship the script path first, package once the flow is proven with real operators.
+- **macOS / Windows host support.** Hosting is Linux-only (systemd, the install script, GPU/Tor
+  assumptions). Cross-platform host support is future work; client already runs broadly.
+- **Live fee estimate (close/sweep).** The close feerate is a sane, editable default (no external
+  service, for sovereignty). A live network estimate — opt-in, e.g. a mempool source over the
+  client's Tor proxy — would prefill a current feerate instead of the static default.
+
 ## Sequencing notes
 - Phases 0→1 are strictly sequential. 2, 3, 4 overlap.
 - Don't build verification beyond reputation, the token model, or mobile until the paid loop has real users.
