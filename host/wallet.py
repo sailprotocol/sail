@@ -29,6 +29,18 @@ CLOSE_TX_VSIZE = 200
 DUST_LIMIT_SAT = 546  # standard P2WPKH dust; below this a sweep output is "little or nothing"
 
 
+def suggested_feerate() -> int:
+    """A starting feerate (sat/vByte) to PREFILL the close form so the operator isn't guessing from
+    nothing. phoenixd exposes no feerate API and we avoid external services (sovereignty), so this is
+    a sane, editable default (override with CLOSE_FEERATE_DEFAULT). A cooperative close isn't urgent,
+    so a modest default is fine; the operator should still sanity-check against a mempool estimator."""
+    try:
+        v = int(os.getenv("CLOSE_FEERATE_DEFAULT", "2"))
+    except (TypeError, ValueError):
+        v = 2
+    return max(1, v)
+
+
 def estimate_close_quote(balance_sat: int, feerate_sat_byte: int) -> dict:
     """Estimate what a channel close pays out: the on-chain fee and the NET the operator receives at
     `feerate`, plus a dust flag so they don't close blind and get nothing. Pure (no phoenixd)."""

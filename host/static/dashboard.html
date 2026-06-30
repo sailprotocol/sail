@@ -70,7 +70,7 @@
   .qrbox img{width:230px; height:230px; image-rendering:pixelated;}
   .modal .cmd.wrap code{white-space:normal; word-break:break-all; overflow-x:visible;}
   .rcverr{color:var(--bad); font-size:0.86rem; margin:0 0 12px; display:none;}
-  .okbox{border:1px solid var(--good); background:var(--good-bg); color:var(--good); border-radius:9px; padding:12px 14px; font-size:0.9rem; margin-bottom:6px;} .okbox b{color:#7fd29a;}
+  .okbox{border:1px solid var(--good); background:var(--good-bg); color:var(--good); border-radius:9px; padding:12px 14px; font-size:0.9rem; margin-bottom:6px; overflow-wrap:anywhere; word-break:break-word;} .okbox b{color:#7fd29a;} .okbox .mono{word-break:break-all;}
   .rcvdone{border:1px solid var(--good); background:var(--good-bg); border-radius:11px; padding:18px; text-align:center; margin-bottom:12px;} .rcvdone .big{font-family:'Bricolage Grotesque'; font-weight:800; font-size:1.3rem; color:var(--good);}
   .quote{border:1px solid var(--line); background:var(--ink-3); border-radius:9px; padding:11px 13px; font-size:0.86rem; margin-bottom:12px;}
   .quote .qrow{display:flex; justify-content:space-between; gap:12px; padding:2px 0;} .quote .qrow .mono{color:var(--fg);}
@@ -257,7 +257,7 @@
     <div id="cl-quote" class="quote" style="display:none;"></div>
     <p class="rcverr" id="cl-err"></p>
     <div id="cl-ok" class="okbox" style="display:none;"></div>
-    <div class="actions"><button class="btn" data-close>Cancel</button><button class="btn danger" id="cl-go">Review close</button></div>
+    <div class="actions"><button class="btn" data-close id="cl-cancel">Cancel</button><button class="btn danger" id="cl-go">Review close</button></div>
   </div>
 </div>
 
@@ -560,10 +560,19 @@ $('wd-go').onclick = async ()=>{
 
 // ---- close & sweep — two-step confirm, with fee/net preview + dust guard ----
 let clArmed=false, clQuoteTimer=null;
-$('w-close').onclick = ()=>{ $('cl-addr').value=''; $('cl-fee').value=''; $('cl-err').style.display='none';
+// A close lags in phoenixd (the channel goes ShuttingDown→Closing before getbalance drops), so a
+// single refresh can read the pre-close balance. Re-poll for a window so the card converges to
+// 0 / no-channel once the sweep registers. (The 5s loop continues independently.)
+function refreshSoon(){ refresh(); [2000,5000,10000,20000,40000].forEach(t=>setTimeout(refresh,t)); }
+$('w-close').onclick = async ()=>{ $('cl-addr').value=''; $('cl-fee').value=''; $('cl-err').style.display='none';
   $('cl-quote').style.display='none'; $('cl-ok').style.display='none'; clArmed=false; $('cl-go').style.display='';
-  $('cl-go').textContent='Review close'; $('cl-go').disabled=false;
-  open('m-close'); $('cl-addr').focus(); };
+  $('cl-go').textContent='Review close'; $('cl-go').disabled=false; $('cl-cancel').textContent='Cancel';
+  open('m-close'); $('cl-addr').focus();
+  // Prefill a sane starting feerate (editable) so the operator isn't guessing from nothing; the
+  // input event triggers the fee/net quote immediately.
+  try{ const f=await (await fetch('/api/wallet/feerate')).json();
+    if(f && f.feerateSatByte){ $('cl-fee').value=f.feerateSatByte; $('cl-fee').dispatchEvent(new Event('input')); } }catch{}
+};
 ['cl-addr','cl-fee'].forEach(id=>$(id).addEventListener('input',()=>{ clArmed=false; $('cl-go').textContent='Review close'; }));
 // Show the estimated on-chain fee + NET payout (and a dust warning) BEFORE confirming, so the
 // operator never closes blind into dust. Re-quote as the feerate changes.
@@ -597,7 +606,8 @@ $('cl-go').onclick = async ()=>{
     clArmed=false; $('cl-go').disabled=false; $('cl-go').textContent='Review close'; return; }
   const tx=(r.closed&&r.closed[0]&&r.closed[0].closingTxId)||'';
   $('cl-ok').innerHTML = `<b>✓ Closing ${r.count} channel(s)</b> — sweeping on-chain to your address.`+(tx?`<br>txid: <span class="mono">${tx}</span>`:'');
-  $('cl-ok').style.display=''; $('cl-go').style.display='none'; refresh();
+  $('cl-ok').style.display=''; $('cl-go').style.display='none'; $('cl-cancel').textContent='Done';
+  refreshSoon();  // converge the card to 0 / no-channel as the close settles in phoenixd
 };
 
 $('copyonion').onclick = ()=>{ navigator.clipboard?.writeText($('copyonion').dataset.c||''); const b=$('copyonion'); b.textContent='copied'; setTimeout(()=>b.textContent='copy',1200); };

@@ -710,6 +710,16 @@ def wallet_close_quote(request: Request):
     return wallet.estimate_close_quote(balance, feerate)
 
 
+@operator_app.get("/api/wallet/feerate")
+def wallet_feerate(request: Request):
+    """A sane starting feerate (sat/vByte) to prefill the close form (editable by the operator)."""
+    err = _wallet_gate(request)
+    if err is not None:
+        return err
+    from host import wallet
+    return {"feerateSatByte": wallet.suggested_feerate(), "source": "default"}
+
+
 def _qr_data_uri(text: str) -> str | None:
     """Render a BOLT11 as an inline SVG data-URI QR with segno (already a repo dep). Generated
     LOCALLY — no external QR service — so the wallet stays sovereign. Black-on-white for scanners."""

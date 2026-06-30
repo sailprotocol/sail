@@ -599,6 +599,41 @@ def test_close_quote_dust_when_net_near_dust_limit():
     assert "dust" in q["detail"].lower()
 
 
+# ---- feerate prefill (close form) -----------------------------------------
+def test_suggested_feerate_default_and_override(monkeypatch):
+    monkeypatch.delenv("CLOSE_FEERATE_DEFAULT", raising=False)
+    assert wallet.suggested_feerate() == 2          # sane default, never 0
+    monkeypatch.setenv("CLOSE_FEERATE_DEFAULT", "7")
+    assert wallet.suggested_feerate() == 7          # operator/env override
+    monkeypatch.setenv("CLOSE_FEERATE_DEFAULT", "notanumber")
+    assert wallet.suggested_feerate() == 2          # bad value falls back
+
+
+def test_endpoint_feerate_prefill(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    monkeypatch.delenv("CLOSE_FEERATE_DEFAULT", raising=False)
+    r = c.get("/api/wallet/feerate")
+    assert r.status_code == 200 and r.json()["feerateSatByte"] >= 1, r.text
+
+
+def test_endpoint_feerate_requires_phoenixd(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "lnd")
+    assert c.get("/api/wallet/feerate").status_code == 400
+
+
+# ---- post-close state: card resets to 0 / no channel ----------------------
+def test_post_close_state_reads_zero_and_no_channel():
+    # After a close + sweep, phoenixd reports 0 balance and no (Normal) channel — so a refresh of
+    # the card shows 0 / no-channel (not the stale pre-close balance).
+    w = _wallet({"/getbalance": FakeResp(payload={"balanceSat": 0, "feeCreditSat": 0}),
+                 "/getinfo": FakeResp(payload={"channels": []})})
+    assert w.balance() == {"balanceSat": 0, "feeCreditSat": 0}
+    ch = w.channels()
+    assert ch["hasChannel"] is False and ch["outboundSat"] == 0 and ch["count"] == 0
+
+
 # ---- decode-invoice endpoint ----------------------------------------------
 def test_endpoint_decode_fixed_amount(monkeypatch):
     c, _ = _client()
