@@ -580,6 +580,75 @@ def test_startup_skips_seed_perms_on_non_phoenixd_host(monkeypatch):
     assert called == [], "non-phoenixd host has no phoenixd seed to tighten"
 
 
+# ---- close fee/net estimate + dust guard ----------------------------------
+def test_close_quote_normal_balance():
+    q = wallet.estimate_close_quote(100_000, 2)
+    assert q["feeSat"] == 2 * wallet.CLOSE_TX_VSIZE and q["netSat"] == 100_000 - q["feeSat"]
+    assert q["dust"] is False and q["estimate"] is True
+
+
+def test_close_quote_dust_when_balance_below_fee():
+    q = wallet.estimate_close_quote(300, 2)  # fee 400 > balance 300
+    assert q["dust"] is True and q["netSat"] == 0
+    assert "at or below the on-chain close fee" in q["detail"]
+
+
+def test_close_quote_dust_when_net_near_dust_limit():
+    q = wallet.estimate_close_quote(800, 2)  # fee 400, net 400 <= 546 dust limit
+    assert q["dust"] is True and q["netSat"] == 400
+    assert "dust" in q["detail"].lower()
+
+
+# ---- decode-invoice endpoint ----------------------------------------------
+def test_endpoint_decode_fixed_amount(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    r = c.post("/api/wallet/decode-invoice", json={"invoice": "lnbc2500u1" + "q" * 10})
+    assert r.status_code == 200 and r.json() == {"amountSat": 250_000, "fixed": True}, r.text
+
+
+def test_endpoint_decode_any_amount(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    r = c.post("/api/wallet/decode-invoice", json={"invoice": "lnbc1" + "q" * 10})
+    assert r.status_code == 200 and r.json() == {"amountSat": None, "fixed": False}, r.text
+
+
+def test_endpoint_decode_requires_phoenixd(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "lnd")
+    r = c.post("/api/wallet/decode-invoice", json={"invoice": "lnbc2500u1xx"})
+    assert r.status_code == 400, r.text
+
+
+# ---- close-quote endpoint -------------------------------------------------
+def test_endpoint_close_quote_ok(monkeypatch):
+    c, d = _client()
+    _set(monkeypatch, "phoenixd")
+    monkeypatch.setattr(d, "_wallet_or_error",
+                        lambda req: (_wallet(_getinfo([
+                            {"channelId": "c", "state": "Normal", "balanceSat": 100_000, "inboundLiquiditySat": 0}])), None))
+    r = c.get("/api/wallet/close-quote?feerate=2")
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["balanceSat"] == 100_000 and j["feeSat"] == 2 * wallet.CLOSE_TX_VSIZE and j["dust"] is False
+
+
+def test_endpoint_close_quote_rejects_bad_feerate(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    for bad in ("0", "abc", "-1", ""):
+        r = c.get("/api/wallet/close-quote?feerate=" + bad)
+        assert r.status_code == 400, (bad, r.text)
+
+
+def test_endpoint_close_quote_blocked_over_onion(monkeypatch):
+    c, _ = _client()
+    _set(monkeypatch, "phoenixd")
+    r = c.get("/api/wallet/close-quote?feerate=2", headers={"host": "x.onion"})
+    assert r.status_code == 404, r.text
+
+
 if __name__ == "__main__":
     simple = [v for k, v in sorted(globals().items())
               if k.startswith("test_") and callable(v) and "monkeypatch" not in v.__code__.co_varnames]

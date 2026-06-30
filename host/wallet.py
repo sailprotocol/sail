@@ -23,6 +23,35 @@ class WalletError(RuntimeError):
     """A phoenixd call failed. The message is operator-facing (local dashboard only)."""
 
 
+# A cooperative channel close is roughly 1 input + ~2 outputs; ~200 vB is a safe over-estimate.
+# phoenixd has no close-fee API, so we estimate feerate × this vsize and LABEL it an estimate.
+CLOSE_TX_VSIZE = 200
+DUST_LIMIT_SAT = 546  # standard P2WPKH dust; below this a sweep output is "little or nothing"
+
+
+def estimate_close_quote(balance_sat: int, feerate_sat_byte: int) -> dict:
+    """Estimate what a channel close pays out: the on-chain fee and the NET the operator receives at
+    `feerate`, plus a dust flag so they don't close blind and get nothing. Pure (no phoenixd)."""
+    balance_sat = _int(balance_sat)
+    feerate_sat_byte = int(feerate_sat_byte)
+    fee = feerate_sat_byte * CLOSE_TX_VSIZE
+    net = balance_sat - fee
+    dust = net <= DUST_LIMIT_SAT
+    if balance_sat <= fee:
+        detail = (f"your channel balance (~{balance_sat} sat) is at or below the on-chain close fee "
+                  f"(~{fee} sat) — you'd receive little or nothing. Consider withdrawing over "
+                  f"Lightning (Withdraw) instead.")
+    elif dust:
+        detail = (f"after the ~{fee} sat close fee you'd receive only ~{max(net, 0)} sat (near the "
+                  f"dust limit). Consider withdrawing over Lightning (Withdraw) instead.")
+    else:
+        detail = (f"estimated on-chain fee ~{fee} sat at {feerate_sat_byte} sat/vB; "
+                  f"you'd receive ~{net} sat.")
+    return {"balanceSat": balance_sat, "feerateSatByte": feerate_sat_byte,
+            "estVsize": CLOSE_TX_VSIZE, "feeSat": fee, "netSat": max(net, 0),
+            "dust": dust, "estimate": True, "detail": detail}
+
+
 def _int(v) -> int:
     try:
         return int(v or 0)
