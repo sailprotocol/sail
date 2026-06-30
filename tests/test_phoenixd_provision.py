@@ -157,14 +157,75 @@ def test_import_seed_writes_seedfile_and_restores(tmp_path, monkeypatch):
     assert captured["mode"] == 0o600, oct(captured["mode"])  # secured before provision
 
 
-def test_import_seed_refuses_when_wallet_exists(monkeypatch):
+def test_import_seed_refuses_when_wallet_exists_without_replace(monkeypatch):
     monkeypatch.setattr(ps, "is_provisioned", lambda: True)
     try:
-        ps.import_seed(["abandon"] * 11 + ["about"])
+        ps.import_seed(["abandon"] * 11 + ["about"])  # replace defaults False
     except RuntimeError as e:
-        assert "already exists" in str(e)
+        assert "replace=True" in str(e)
     else:
-        raise AssertionError("import must refuse to clobber an existing wallet")
+        raise AssertionError("import must refuse to clobber an existing wallet without replace")
+
+
+def test_import_seed_replace_archives_then_restores(tmp_path, monkeypatch):
+    d = tmp_path / ".phoenix"
+    d.mkdir()
+    (d / "seed.dat").write_text("zoo zoo zoo")  # an old (to-be-archived) wallet
+    monkeypatch.setattr(ps, "PHOENIX_DIR", d)
+    monkeypatch.setattr(ps, "SEED_FILE", d / "seed.dat")
+    monkeypatch.setattr(ps, "CONF_FILE", d / "phoenix.conf")
+    monkeypatch.setattr(ps, "is_provisioned", lambda: True)        # a wallet exists
+    monkeypatch.setattr(ps, "_stop_phoenixd_service", lambda: None)
+    monkeypatch.setattr(ps, "_port_in_use", lambda h, p: False)    # service stopped, port free
+    archived = {}
+    monkeypatch.setattr(ps, "_archive_phoenix_dir", lambda: archived.setdefault("done", d.parent / ".phoenix.replaced-1"))
+    words = ["abandon"] * 11 + ["about"]
+    monkeypatch.setattr(ps, "provision", lambda version=None: {"service": {}})
+    monkeypatch.setattr(ps, "read_seed_words", lambda: words)
+    out = ps.import_seed(words, replace=True)
+    assert out["imported"] is True and "done" in archived  # old wallet archived, not blocked
+
+
+def test_import_seed_replace_aborts_if_phoenixd_wont_stop(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "is_provisioned", lambda: True)
+    monkeypatch.setattr(ps, "_stop_phoenixd_service", lambda: None)
+    monkeypatch.setattr(ps, "_port_in_use", lambda h, p: True)   # phoenixd still running
+    archived = {"called": False}
+    monkeypatch.setattr(ps, "_archive_phoenix_dir", lambda: archived.update(called=True))
+    try:
+        ps.import_seed(["abandon"] * 11 + ["about"], replace=True)
+    except RuntimeError as e:
+        assert "still in use" in str(e) and archived["called"] is False  # never archive a live wallet
+    else:
+        raise AssertionError("must abort (not archive) if phoenixd can't be stopped")
+
+
+def test_wallet_funded_status(monkeypatch):
+    import httpx
+    monkeypatch.setattr(ps, "is_provisioned", lambda: True)
+    monkeypatch.setattr(ps, "read_http_password", lambda: "pw")
+
+    class FakeResp:
+        def __init__(self, payload): self.status_code = 200; self._p = payload
+        def json(self): return self._p
+
+    def make_client(balance, channels, raise_err=False):
+        class C:
+            def __init__(self, **k): pass
+            def get(self, path):
+                if raise_err: raise httpx.ConnectError("refused")
+                return FakeResp({"balanceSat": balance, "feeCreditSat": 0}) if path == "/getbalance" \
+                    else FakeResp({"channels": channels})
+        return C
+
+    monkeypatch.setattr(httpx, "Client", make_client(0, []))
+    assert ps.wallet_funded_status()[0] is False        # empty wallet
+    monkeypatch.setattr(httpx, "Client", make_client(5000, []))
+    assert ps.wallet_funded_status()[0] is True         # has balance
+    monkeypatch.setattr(httpx, "Client", make_client(0, [{"channelId": "c"}]))
+    assert ps.wallet_funded_status()[0] is True         # has a channel
+    monkeypatch.setattr(httpx, "Client", make_client(0, [], raise_err=True))
+    assert ps.wallet_funded_status()[0] is None         # unreachable -> unknown
 
 
 def test_import_seed_detects_restore_mismatch(tmp_path, monkeypatch):

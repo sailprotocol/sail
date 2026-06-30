@@ -278,7 +278,54 @@ def try_install_units(binary: pathlib.Path, deploy_dir: pathlib.Path | None = No
 
 
 # --- import an existing wallet ----------------------------------------------
-def import_seed(words: list[str], version: str | None = None) -> dict:
+def wallet_funded_status() -> tuple[bool | None, str]:
+    """Best-effort: is the EXISTING ~/.phoenix wallet funded? Queries the running phoenixd with the
+    password from phoenix.conf. Returns (funded, detail): funded=True if it holds a balance/fee
+    credit or any channel, False if verifiably empty, None if phoenixd is unreachable (can't tell).
+    Used so a never-funded auto-generated wallet doesn't block a deliberate import, while a REAL
+    funded wallet still does."""
+    import httpx
+    if not is_provisioned():
+        return (False, "no wallet present")
+    try:
+        pw = read_http_password()
+    except Exception:  # noqa: BLE001
+        return (None, "wallet present but phoenix.conf unreadable")
+    base = os.getenv("PHOENIXD_API_URL", "http://127.0.0.1:9740").rstrip("/")
+    try:
+        c = httpx.Client(base_url=base, auth=("", pw), timeout=8.0)
+        bal = c.get("/getbalance")
+        if bal.status_code != 200:
+            return (None, "phoenixd not reachable")
+        b = bal.json()
+        info = c.get("/getinfo")
+        chans = info.json().get("channels", []) if info.status_code == 200 else []
+        bsat, fc = int(b.get("balanceSat") or 0), int(b.get("feeCreditSat") or 0)
+        funded = bsat > 0 or fc > 0 or len(chans) > 0
+        return (funded, f"balance {bsat} sat, fee credit {fc} sat, {len(chans)} channel(s)")
+    except (httpx.HTTPError, ValueError):
+        return (None, "phoenixd not reachable")
+
+
+def _stop_phoenixd_service() -> None:
+    """Best-effort stop of the durable phoenixd.service so it stops regenerating/holding ~/.phoenix
+    before we replace it. Then wait briefly for the API port to free up."""
+    from host import config_writer
+    config_writer.service_command("stop", service="phoenixd")  # sudo -n; ignore result (best effort)
+    host, port = _api_port()
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline and _port_in_use(host, port):
+        time.sleep(0.5)
+
+
+def _archive_phoenix_dir() -> pathlib.Path:
+    """Move ~/.phoenix aside (never delete) so a replace is always recoverable. Returns the path."""
+    dest = PHOENIX_DIR.parent / f".phoenix.replaced-{int(time.time())}"
+    os.rename(PHOENIX_DIR, dest)
+    return dest
+
+
+def import_seed(words: list[str], replace: bool = False, version: str | None = None) -> dict:
     """Restore an EXISTING wallet from the operator's recovery phrase instead of generating one.
 
     phoenixd's getOrGenerateSeed() reads ~/.phoenix/seed.dat if it exists (else generates), so we
@@ -286,12 +333,23 @@ def import_seed(words: list[str], version: str | None = None) -> dict:
     its `[a-z]+` reader parses) — then run the normal provision flow, where phoenixd restores that
     wallet. Caller MUST have validated the mnemonic (BIP39) already; phoenixd also validates on start.
 
-    Verifies phoenixd came up with the EXPECTED wallet (seed.dat still holds the imported words —
-    phoenixd does not regenerate when a seed file is present). Never logs the seed."""
+    If a wallet already exists (commonly an auto-generated one from a prior 'create new' attempt, or
+    one the durable phoenixd.service regenerated), `replace` must be True: we stop phoenixd.service
+    and MOVE ~/.phoenix aside (never delete — always recoverable) before restoring. The caller is
+    responsible for refusing to replace a FUNDED wallet (see wallet_funded_status). Never logs the seed."""
     if is_provisioned():
-        raise RuntimeError(
-            f"a phoenixd wallet already exists at {PHOENIX_DIR} — importing would not replace it; "
-            f"move/remove ~/.phoenix first if you really mean to restore a different seed")
+        if not replace:
+            raise RuntimeError(
+                f"a phoenixd wallet already exists at {PHOENIX_DIR} — pass replace=True to move it "
+                f"aside and restore the imported seed")
+        _stop_phoenixd_service()
+        host, port = _api_port()
+        if _port_in_use(host, port):
+            raise RuntimeError(
+                f"couldn't stop the running phoenixd ({host}:{port} still in use) — stop "
+                f"phoenixd.service and retry the import")
+        archived = _archive_phoenix_dir()
+        print(f"[host] archived existing ~/.phoenix to {archived} before import")
     PHOENIX_DIR.mkdir(parents=True, exist_ok=True)
     SEED_FILE.write_text(" ".join(words))  # phoenixd seed.dat format: space-separated words
     secure_seed_files()                    # 0600 before phoenixd (and anyone) can read it

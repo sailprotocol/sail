@@ -467,13 +467,48 @@ def test_payout_import_success_returns_imported_no_seed_ceremony(monkeypatch):
     monkeypatch.setenv("PAYMENTS", "mock")
     from host import config_writer, phoenixd_setup
     monkeypatch.setattr(config_writer, "update_env_file", lambda *a, **k: None)
+    monkeypatch.setattr(phoenixd_setup, "is_provisioned", lambda: False)  # fresh host, no wallet yet
     monkeypatch.setattr(phoenixd_setup, "import_seed",
-                        lambda words: {"imported": True, "service": {"installed": False}})
+                        lambda words, replace=False: {"imported": True, "service": {"installed": False}})
     r = c.post("/api/setup/payout", json={"tier": "phoenixd", "mode": "import", "seed": _VALID12})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["imported"] is True and body["tier"] == "phoenixd"
     assert "seed_words" not in body  # imported wallet: operator already holds the phrase, no ceremony
+
+
+def test_payout_import_refuses_funded_existing_wallet(monkeypatch):
+    c, d = _setup_client()
+    monkeypatch.setenv("PAYMENTS", "mock")
+    from host import phoenixd_setup
+    monkeypatch.setattr(phoenixd_setup, "is_provisioned", lambda: True)
+    monkeypatch.setattr(phoenixd_setup, "wallet_funded_status", lambda: (True, "balance 5000 sat"))
+    r = c.post("/api/setup/payout", json={"tier": "phoenixd", "mode": "import", "seed": _VALID12})
+    assert r.status_code == 409 and r.json().get("funded") is True, r.text  # protect real funds
+
+
+def test_payout_import_asks_replace_for_empty_existing_wallet(monkeypatch):
+    c, d = _setup_client()
+    monkeypatch.setenv("PAYMENTS", "mock")
+    from host import phoenixd_setup
+    monkeypatch.setattr(phoenixd_setup, "is_provisioned", lambda: True)
+    monkeypatch.setattr(phoenixd_setup, "wallet_funded_status", lambda: (False, "balance 0 sat, 0 channel(s)"))
+    r = c.post("/api/setup/payout", json={"tier": "phoenixd", "mode": "import", "seed": _VALID12})
+    assert r.status_code == 409 and r.json().get("needs_replace") is True, r.text  # not a dead-end
+
+
+def test_payout_import_replace_proceeds(monkeypatch):
+    c, d = _setup_client()
+    monkeypatch.setenv("PAYMENTS", "mock")
+    from host import config_writer, phoenixd_setup
+    monkeypatch.setattr(config_writer, "update_env_file", lambda *a, **k: None)
+    monkeypatch.setattr(phoenixd_setup, "is_provisioned", lambda: True)  # exists, but replace given
+    seen = {}
+    monkeypatch.setattr(phoenixd_setup, "import_seed",
+                        lambda words, replace=False: seen.update(replace=replace) or {"imported": True, "service": {}})
+    r = c.post("/api/setup/payout", json={"tier": "phoenixd", "mode": "import", "seed": _VALID12, "replace": True})
+    assert r.status_code == 200 and r.json()["imported"] is True, r.text
+    assert seen["replace"] is True  # replace flag threaded through
 
 
 def test_payout_generate_still_returns_seed_for_ceremony(monkeypatch):

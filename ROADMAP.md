@@ -121,6 +121,15 @@ Follow-ups for the web client (`client/webapp.py` + `client/static/`, shared log
 
 ---
 
+## Wallet v0.3 polish (deferred — host wallet UI is shipping in v0.2)
+The host wallet (balance/channels, receive+QR, seed backup, withdraw, close/sweep, seed import)
+ships in v0.2. These are once-per-setup niceties, not blockers — defer:
+- **Per-word seed entry.** Replace the import textarea with 12 individual word boxes that validate
+  per-word (turn green on a valid BIP39 word), with the whole field turning green once the full
+  phrase passes the BIP39 checksum.
+- **Word autocomplete.** Dropdown suggestions from the 2048-word BIP39 list (`shared/bip39.py`) as
+  the operator types each word, to prevent typos.
+
 ## Sequencing notes
 - Phases 0→1 are strictly sequential. 2, 3, 4 overlap.
 - Don't build verification beyond reputation, the token model, or mobile until the paid loop has real users.

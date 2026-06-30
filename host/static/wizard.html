@@ -388,11 +388,23 @@ async function setupPayout(){
   if(t==='phoenixd'){
     if(phMode()==='import'){
       const seed=$('ph-seed').value.trim();
+      const send=(replace)=>api('/api/setup/payout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tier:'phoenixd', mode:'import', seed, replace})});
       nextBtn.disabled=true; nextBtn.textContent='Importing…';
-      $('payoutnote').innerHTML='<span class="spinner"></span> Restoring your wallet & starting phoenixd… (first run can take a moment)';
-      const r=await api('/api/setup/payout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tier:'phoenixd', mode:'import', seed})});
-      $('ph-seed').value='';  // clear the entered phrase from the DOM after sending
-      if(r.error){ $('payoutnote').className='note bad'; $('payoutnote').textContent='Import failed: '+r.error; nextBtn.textContent='Retry'; nextBtn.disabled=false; return false; }
+      $('payoutnote').className='note'; $('payoutnote').innerHTML='<span class="spinner"></span> Restoring your wallet & starting phoenixd… (first run can take a moment)';
+      let r=await send(false);
+      if(r && r.funded){  // a REAL funded wallet — never silently clobber it
+        $('payoutnote').className='note bad'; $('payoutnote').textContent='Import blocked: '+r.error;
+        nextBtn.textContent='Retry'; nextBtn.disabled=false; return false;
+      }
+      if(r && r.needs_replace){  // an empty/auto-generated wallet — confirm replacing it
+        if(!confirm((r.message||'An existing empty wallet was found.')+'\n\nReplace it and import your seed? Your old wallet files are archived aside, not deleted.')){
+          $('payoutnote').className='note'; $('payoutnote').textContent='Import cancelled.'; nextBtn.textContent='Retry'; nextBtn.disabled=false; return false;
+        }
+        $('payoutnote').innerHTML='<span class="spinner"></span> Replacing the empty wallet & restoring…';
+        r=await send(true);
+      }
+      $('ph-seed').value='';  // clear the entered phrase from the DOM after we're done sending it
+      if(!r || r.error){ $('payoutnote').className='note bad'; $('payoutnote').textContent='Import failed: '+((r&&r.error)||'unknown'); nextBtn.textContent='Retry'; nextBtn.disabled=false; return false; }
       $('payoutnote').className='note'; $('payoutnote').textContent='Wallet restored.'; return true;  // no backup ceremony — operator already holds the seed
     }
     nextBtn.disabled=true; nextBtn.textContent='Setting up node…';
