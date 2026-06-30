@@ -19,6 +19,11 @@ import pathlib
 _controller = None
 
 
+class OnionCollisionError(RuntimeError):
+    """Tor already has this host's onion registered (another instance holds it, or a prior run
+    didn't release it). The message is operator-facing with a recovery step."""
+
+
 def setup_onion(port: int) -> str:
     """Create (or restore) a v3 onion service mapping onion:80 -> 127.0.0.1:port.
 
@@ -38,13 +43,27 @@ def setup_onion(port: int) -> str:
     else:
         key_type, key_content = "NEW", "ED25519-V3"
 
-    resp = _controller.create_ephemeral_hidden_service(
-        {80: port},
-        key_type=key_type,
-        key_content=key_content,
-        await_publication=True,
-        detached=False,
-    )
+    try:
+        resp = _controller.create_ephemeral_hidden_service(
+            {80: port},
+            key_type=key_type,
+            key_content=key_content,
+            await_publication=True,
+            detached=False,
+        )
+    except Exception as e:  # noqa: BLE001 — translate the raw stem error into an actionable one
+        # Our onion (derived from ONION_KEY_PATH) is already registered in Tor. With detached=False
+        # a clean shutdown releases it, so a collision means another live instance is holding it (or
+        # a prior run left it registered). We can't adopt another control connection's service, so
+        # surface a clear recovery step rather than a raw stem traceback.
+        if "collision" in str(e).lower():
+            raise OnionCollisionError(
+                "Tor already has this host's onion registered — another SAIL instance is likely "
+                "running (it holds the onion), or a previous run didn't release it. Stop the other "
+                "instance (`sudo systemctl stop sail-host`, or kill it), or restart Tor "
+                "(`sudo systemctl restart tor`), then start again."
+            ) from e
+        raise
 
     # On first creation Tor returns the freshly generated key; persist it for a stable address.
     if resp.private_key:

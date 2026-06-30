@@ -17,6 +17,8 @@ import collections
 import os
 import pathlib
 import secrets
+import socket
+import sys
 import threading
 import time
 
@@ -58,6 +60,51 @@ ENDPOINT = os.getenv("HOST_ENDPOINT", f"http://127.0.0.1:{PORT}")
 # Operator surface: a separate localhost-only listener (NEVER added to the Tor hidden service).
 OPERATOR_HOST = os.getenv("OPERATOR_HOST", "127.0.0.1")  # keep it loopback — do not bind 0.0.0.0
 OPERATOR_PORT = int(os.getenv("OPERATOR_PORT", "8090"))
+
+# --- daemon lifecycle guards (F-lifecycle) ----------------------------------
+# A confused operator who double-starts (manual uvicorn + the sail-host service), or restarts after
+# a crash, must get a CLEAR message + recovery step — never a raw traceback, never a respawn loop.
+# Fatal conflicts exit with this code; the systemd unit sets RestartPreventExitStatus to it so
+# systemd does NOT respawn (no loop) on a genuine conflict.
+_FATAL_EXIT = 3
+
+
+def _fatal(msg: str) -> None:
+    """Print an actionable one-liner and hard-exit with _FATAL_EXIT (no traceback, no respawn)."""
+    print(f"[host] FATAL: {msg}", file=sys.stderr, flush=True)
+    os._exit(_FATAL_EXIT)
+
+
+def _port_busy(port: int, host: str = "127.0.0.1") -> bool:
+    """True if something is already LISTENING on host:port (i.e. another instance/server)."""
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def _single_instance_conflict() -> str | None:
+    """Return an actionable message if a SAIL host daemon already appears to be running, else None.
+
+    The INFERENCE port is the single-instance lock: only one host can serve it, and a second start
+    (manual uvicorn vs. the sail-host service) would otherwise collide with a raw '[Errno 98]'. The
+    operator port is NOT a hard lock — it may legitimately be taken by something else (e.g. the
+    client GUI), and _run_operator_app already degrades gracefully (warns, inference keeps serving)."""
+    if _port_busy(PORT):
+        return (f"port {PORT} (inference) is already in use — a SAIL host daemon already appears to "
+                f"be running. Stop it first: `sudo systemctl stop sail-host` (or kill the existing "
+                f"process), then start again.")
+    return None
+
+
+# Run the single-instance pre-flight at import — BEFORE uvicorn binds the inference port, so a
+# double-start gets the clear message above instead of uvicorn's raw "[Errno 98]". Skipped under
+# tests (they import the app via TestClient and set SAIL_OPERATOR_AUTOSTART=0).
+if os.getenv("SAIL_OPERATOR_AUTOSTART", "1") != "0":
+    _conflict = _single_instance_conflict()
+    if _conflict:
+        _fatal(_conflict)
 PRICE_MSAT_PER_TOKEN = int(os.getenv("PRICE_MSAT_PER_TOKEN", "1000"))  # 1 sat/token (demo)
 TRANSPORT = os.getenv("TRANSPORT", "clearnet").lower()  # clearnet | tor
 CHUNK_TOKENS = max(1, int(os.getenv("CHUNK_TOKENS", "8")))  # metered settlement granularity
@@ -264,7 +311,10 @@ def publish_listing() -> None:
               f"can't receive until an initial inbound payment opens a channel (~25-35k sat).")
     if TRANSPORT == "tor":
         # Expose the daemon as a .onion and advertise THAT as the endpoint.
-        ENDPOINT = transport.setup_onion(PORT)
+        try:
+            ENDPOINT = transport.setup_onion(PORT)
+        except transport.OnionCollisionError as e:
+            _fatal(str(e))  # clear message + no-respawn exit, not a raw stem traceback
         print(f"[host] tor onion endpoint: {ENDPOINT}")
     # F11: don't announce to PUBLIC relays until the host is live-to-serve (post go-live). A fresh
     # host still in the wizard would otherwise leak a ghost listing that can't serve.

@@ -28,6 +28,9 @@ Environment=PYTHONPATH={{WORKDIR}}
 ExecStart={{UVICORN}} host.daemon:app --port {{PORT}}
 Restart=always
 RestartSec=5
+# Exit code 3 = a fatal lifecycle conflict the daemon detected and explained (port already in use,
+# onion collision). Don't respawn-loop on it — the operator needs to resolve it first.
+RestartPreventExitStatus=3
 
 [Install]
 WantedBy=multi-user.target
