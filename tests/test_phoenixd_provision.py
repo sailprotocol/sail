@@ -129,6 +129,48 @@ def test_secure_seed_files_tightens_perms(tmp_path, monkeypatch):
     assert (d.stat().st_mode & 0o777) == 0o700, oct(d.stat().st_mode)
 
 
+# ---- API password: phoenix.conf is the single source of truth (no drift) ---
+def test_resolve_password_prefers_conf_over_stale_env(tmp_path, monkeypatch):
+    conf = tmp_path / "phoenix.conf"
+    conf.write_text("http-password=REALPW\n")
+    monkeypatch.setattr(ps, "CONF_FILE", conf)
+    monkeypatch.setenv("PHOENIXD_API_PASSWORD", "STALEPW")  # a drifted copy must NOT win
+    assert ps.resolve_api_password() == "REALPW"
+
+
+def test_resolve_password_falls_back_to_env_without_conf(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "CONF_FILE", tmp_path / "nope.conf")  # no local phoenix.conf
+    monkeypatch.setenv("PHOENIXD_API_PASSWORD", "OVERRIDE")       # remote-phoenixd override
+    assert ps.resolve_api_password() == "OVERRIDE"
+
+
+def test_resolve_password_raises_when_no_conf_and_no_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "CONF_FILE", tmp_path / "nope.conf")
+    monkeypatch.delenv("PHOENIXD_API_PASSWORD", raising=False)
+    try:
+        ps.resolve_api_password()
+    except RuntimeError as e:
+        assert "no phoenixd API password" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError when no password source exists")
+
+
+def test_provision_does_not_write_password_to_env(tmp_path, monkeypatch):
+    from host import config_writer
+    captured = {}
+    monkeypatch.setattr(config_writer, "update_env_file", lambda updates, **k: captured.update(updates))
+    monkeypatch.setattr(ps, "download_phoenixd", lambda v=None: tmp_path / "phoenixd")
+    monkeypatch.setattr(ps, "first_run", lambda b, **k: None)
+    monkeypatch.setattr(ps, "is_provisioned", lambda: True)
+    monkeypatch.setattr(ps, "secure_seed_files", lambda: {})
+    monkeypatch.setattr(ps, "read_http_password", lambda *a, **k: "pw")
+    monkeypatch.setattr(ps, "read_seed_words", lambda *a, **k: ["abandon"] * 12)
+    monkeypatch.setattr(ps, "try_install_units", lambda b: {"installed": True})
+    ps.provision()
+    assert "PHOENIXD_API_PASSWORD" not in captured  # password is NOT copied into .env.host
+    assert captured.get("PAYMENTS") == "phoenixd" and "PHOENIXD_API_URL" in captured
+
+
 # ---- import an existing seed -----------------------------------------------
 def test_import_seed_writes_seedfile_and_restores(tmp_path, monkeypatch):
     d = tmp_path / ".phoenix"

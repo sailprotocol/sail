@@ -145,8 +145,11 @@ class PhoenixdLightning(LightningBackend):
     """
 
     def __init__(self) -> None:
+        from host import phoenixd_setup  # local import (platform glue) — avoids an import cycle
         base = os.getenv("PHOENIXD_API_URL", "http://127.0.0.1:9740").rstrip("/")
-        password = os.environ["PHOENIXD_API_PASSWORD"]
+        # Source of truth is phoenix.conf (resolve_api_password), so the password can't drift from
+        # the active wallet on import/restore/re-provision. PHOENIXD_API_PASSWORD is only a fallback.
+        password = phoenixd_setup.resolve_api_password()
         # Basic auth, empty username + the http-password (phoenixd's scheme). localhost -> fast.
         self._client = httpx.Client(base_url=base, auth=("", password), timeout=10.0)
 

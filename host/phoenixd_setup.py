@@ -99,6 +99,25 @@ def read_http_password(conf_path: pathlib.Path = CONF_FILE) -> str:
     raise RuntimeError("http-password not present in phoenix.conf")
 
 
+def resolve_api_password() -> str:
+    """The phoenixd API password, with ~/.phoenix/phoenix.conf as the SINGLE SOURCE OF TRUTH.
+
+    phoenixd regenerates the http-password per wallet, so a copy stored elsewhere (e.g. a stale
+    PHOENIXD_API_PASSWORD in .env.host) drifts on every wallet change — import, restore, re-provision
+    — and the daemon then authenticates with the wrong password (HTTP 401). Reading phoenix.conf each
+    time means whatever wallet is active, we use that wallet's actual password. The
+    PHOENIXD_API_PASSWORD env var is honored ONLY as a fallback when there's no local phoenix.conf
+    (e.g. a remote phoenixd). Never logged."""
+    try:
+        return read_http_password(CONF_FILE)  # local phoenix.conf — the active wallet's real password
+    except (FileNotFoundError, RuntimeError):
+        pw = os.getenv("PHOENIXD_API_PASSWORD", "").strip()
+        if pw:
+            return pw  # explicit override for a non-default (e.g. remote) phoenixd
+        raise RuntimeError(
+            "no phoenixd API password: no local ~/.phoenix/phoenix.conf and PHOENIXD_API_PASSWORD unset")
+
+
 def read_seed_words(seed_file: pathlib.Path = SEED_FILE) -> list[str]:
     """Read the BIP39 mnemonic phoenixd wrote to seed.dat. Returns the word list (12 or 24).
     Surfaced to the local wizard only — caller must not persist or transmit it."""
@@ -364,7 +383,9 @@ def import_seed(words: list[str], replace: bool = False, version: str | None = N
 # --- orchestrator -----------------------------------------------------------
 def provision(version: str | None = None) -> dict:
     """Full phoenixd setup. Returns the seed words (for the LOCAL wizard to display once) plus the
-    service-install status. Writes PAYMENTS=phoenixd + PHOENIXD_API_PASSWORD into .env.host."""
+    service-install status. Writes PAYMENTS=phoenixd + PHOENIXD_API_URL into .env.host — NOT the
+    password: the daemon reads that live from phoenix.conf (resolve_api_password), so it can't drift
+    when the wallet changes."""
     from host import config_writer  # local import to avoid a cycle
 
     binary = download_phoenixd(version)
@@ -377,13 +398,12 @@ def provision(version: str | None = None) -> dict:
             f"phoenixd provisioning incomplete — expected wallet files under {PHOENIX_DIR} "
             f"(phoenix.conf + seed.dat) but they are missing")
     secure_seed_files()  # phoenixd writes seed.dat/phoenix.conf 0644 — tighten before we go further
-    password = read_http_password()
+    read_http_password()  # sanity: confirm a password is present in phoenix.conf (raises if not)
     seed_words = read_seed_words()  # surfaced locally only; never written elsewhere
 
     config_writer.update_env_file({
         "PAYMENTS": "phoenixd",
         "PHOENIXD_API_URL": os.getenv("PHOENIXD_API_URL", "http://127.0.0.1:9740"),
-        "PHOENIXD_API_PASSWORD": password,
     })
     install = try_install_units(binary)
     return {"provisioned": True, "seed_words": seed_words, "service": install}

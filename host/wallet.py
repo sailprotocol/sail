@@ -34,7 +34,15 @@ class PhoenixdWallet:
     """Thin wrapper over phoenixd's HTTP API. Pass a client in tests; defaults to env config."""
 
     def __init__(self, client: httpx.Client | None = None) -> None:
-        self._client = client or _default_client()
+        # Lazy: don't build the client (which resolves the phoenix.conf password) until an actual API
+        # call is made. So constructing a wallet is cheap and side-effect-free — input validation can
+        # run first, and the password is resolved fresh per request (reinforcing no .env.host drift).
+        self._client = client
+
+    def _conn(self) -> httpx.Client:
+        if self._client is None:
+            self._client = _default_client()
+        return self._client
 
     # --- read-only -----------------------------------------------------------
     def balance(self) -> dict:
@@ -130,10 +138,11 @@ class PhoenixdWallet:
 
     # --- internals -----------------------------------------------------------
     def _call(self, method: str, path: str, data: dict | None = None):
+        c = self._conn()
         try:
-            return self._client.get(path) if method == "GET" else self._client.post(path, data=data)
+            return c.get(path) if method == "GET" else c.post(path, data=data)
         except httpx.HTTPError as e:
-            raise WalletError(f"phoenixd unreachable at {self._client.base_url}: {str(e)[:120]}") from e
+            raise WalletError(f"phoenixd unreachable at {c.base_url}: {str(e)[:120]}") from e
 
     @staticmethod
     def _ok(r):
@@ -157,8 +166,15 @@ class PhoenixdWallet:
 
 
 def _default_client() -> httpx.Client:
+    from host import phoenixd_setup  # local import — avoids an import cycle
     base = os.getenv("PHOENIXD_API_URL", "http://127.0.0.1:9740").rstrip("/")
-    password = os.getenv("PHOENIXD_API_PASSWORD", "")
+    # Read the password live from phoenix.conf (resolve_api_password), so the wallet card always
+    # authenticates with the ACTIVE wallet's password — no .env.host drift after an import/restore
+    # (the HTTP 401-with-funds bug). Env var is only a remote-phoenixd fallback.
+    try:
+        password = phoenixd_setup.resolve_api_password()
+    except RuntimeError as e:
+        raise WalletError(str(e)) from e
     # Basic auth: empty username + the http-password (phoenixd's scheme), same as the payment flow.
     return httpx.Client(base_url=base, auth=("", password), timeout=15.0)
 
