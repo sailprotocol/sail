@@ -454,14 +454,22 @@ async function refreshWallet(payments){
       : 'spendable Lightning balance';
   } else if(bal && bal.error){ $('w-balsub').textContent = bal.error; }
   if(ch && !ch.error){
-    const c0 = (ch.channels&&ch.channels[0])||{};
-    $('w-chan').innerHTML = ch.count>0 ? `${ch.count} · <span class="mono">${c0.state||'—'}</span>` : 'none yet';
-    $('w-inbound').textContent = num(ch.inboundSat)+' sat';
-    $('w-outbound').textContent = num(ch.outboundSat)+' sat';
+    // Channel/liquidity reflect only OPEN channels (openCount). A closing channel is settling
+    // on-chain — shown as such, never as spendable/can-send. inbound/outbound are open-only, so
+    // they read 0 once everything is closed (matching the 0 balance) — no phantom figures.
+    const open=ch.openCount||0, closing=ch.closingCount||0;
+    $('w-chan').innerHTML = open>0 ? `${open} · <span class="mono">Normal</span>`
+      : (closing>0 ? `<span class="mono">closing</span> — funds settling on-chain` : 'no channel');
+    $('w-inbound').textContent = num(open>0 ? ch.inboundSat : 0)+' sat';
+    $('w-outbound').textContent = num(open>0 ? ch.outboundSat : 0)+' sat';
     const cliff=$('w-cliff');
-    // Gate the "no channel yet" cliff on CHANNEL EXISTENCE, not inbound>0. A small first channel
-    // legitimately has little inbound headroom — that's a softer note, not the cliff.
-    if(!ch.hasChannel){
+    if(open===0 && closing>0){
+      // mid-close: funds are on-chain now, not spendable — not the "no channel yet, go fund" cliff
+      cliff.style.display=''; cliff.className='cliff soft';
+      cliff.innerHTML = `<b>Channel closing.</b> Your funds are settling on-chain — this can take a while. `
+        + `You have no spendable Lightning balance until you open a new channel (Receive / fund).`;
+    } else if(!ch.hasChannel){
+      // Gate the "no channel yet" cliff on OPEN-channel existence, not inbound>0.
       cliff.style.display=''; cliff.className='cliff';
       cliff.innerHTML = `<b>No channel yet.</b> You need ~25–35k sat of inbound to receive payments. `
         + `phoenixd has no manual “open channel” step — use <b>Receive / fund</b> below to generate an `
