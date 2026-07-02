@@ -122,13 +122,44 @@ def test_channels_empty_means_no_channel():
     assert out["inboundSat"] == 0 and out["outboundSat"] == 0
 
 
-def test_channels_non_normal_state_is_not_a_usable_channel():
-    # e.g. an offline/opening channel exists in the list but isn't usable -> hasChannel False
-    out = _wallet(_getinfo([{"channelId": "y", "state": "Offline", "balanceSat": 0}])).channels()
-    assert out["count"] == 1 and out["normalCount"] == 0 and out["hasChannel"] is False
+def test_channels_non_normal_state_is_not_counted_or_summed():
+    # a transient (Offline/opening) channel isn't live: not counted, contributes no liquidity
+    out = _wallet(_getinfo([{"channelId": "y", "state": "Offline",
+                             "balanceSat": 9999, "inboundLiquiditySat": 8888}])).channels()
+    assert out["count"] == 0 and out["openCount"] == 0 and out["hasChannel"] is False
+    assert out["outboundSat"] == 0 and out["inboundSat"] == 0  # phantom liquidity excluded
 
 
-def test_channels_totals_sum_across_channels():
+def test_channels_all_closed_reads_zero_not_stale():
+    # THE reported bug: fully-closed channels still carrying figures must NOT show as liquidity.
+    out = _wallet(_getinfo([
+        {"channelId": "a", "state": "Closed", "balanceSat": 62667, "inboundLiquiditySat": 4044684},
+        {"channelId": "b", "state": "Closed", "balanceSat": 0, "inboundLiquiditySat": 0},
+    ])).channels()
+    assert out["count"] == 0 and out["hasChannel"] is False and out["canReceive"] is False
+    assert out["outboundSat"] == 0 and out["inboundSat"] == 0  # no phantom 62,667 / 4M
+    assert out["closingCount"] == 0  # Closed is done, not "closing"
+
+
+def test_channels_closing_is_settling_not_spendable():
+    # mid-close (Negotiating/ShuttingDown/Closing): funds settling on-chain, not spendable/can-send
+    out = _wallet(_getinfo([
+        {"channelId": "c", "state": "Negotiating", "balanceSat": 50000, "inboundLiquiditySat": 10000},
+    ])).channels()
+    assert out["openCount"] == 0 and out["closingCount"] == 1 and out["hasChannel"] is False
+    assert out["outboundSat"] == 0 and out["inboundSat"] == 0
+
+
+def test_channels_mixed_open_and_closed_counts_only_open():
+    out = _wallet(_getinfo([
+        {"channelId": "a", "state": "Normal", "balanceSat": 1000, "inboundLiquiditySat": 2000},
+        {"channelId": "b", "state": "Closed", "balanceSat": 999999, "inboundLiquiditySat": 999999},
+    ])).channels()
+    assert out["count"] == 1 and out["outboundSat"] == 1000 and out["inboundSat"] == 2000
+    assert len(out["channels"]) == 1 and out["channels"][0]["channelId"] == "a"
+
+
+def test_channels_totals_sum_across_open_channels():
     out = _wallet(_getinfo([
         {"channelId": "a", "state": "Normal", "balanceSat": 1000, "inboundLiquiditySat": 2000},
         {"channelId": "b", "state": "Normal", "balanceSat": 3000, "inboundLiquiditySat": 4000},

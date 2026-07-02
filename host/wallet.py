@@ -64,6 +64,11 @@ def estimate_close_quote(balance_sat: int, feerate_sat_byte: int) -> dict:
             "dust": dust, "estimate": True, "detail": detail}
 
 
+# lightning-kmp channel states that mean "closing / settling on-chain" (not open, not fully Closed).
+# funds are moving on-chain and are NOT spendable over Lightning while in these states.
+_CLOSING_STATES = {"Negotiating", "ShuttingDown", "Closing"}
+
+
 def _int(v) -> int:
     try:
         return int(v or 0)
@@ -101,28 +106,35 @@ class PhoenixdWallet:
         availableBalanceForSend (OUTBOUND / can send — matches /getbalance), `inboundLiquiditySat` =
         availableBalanceForReceive (INBOUND / can receive), `capacitySat`.
 
-        hasChannel = at least one open ("Normal") channel exists — gate the channel-cliff message on
-        THIS, not on inbound>0 (a small first channel legitimately has little inbound headroom)."""
+        Only OPEN ("Normal") channels are live: a Closed channel's liquidity is gone on-chain, and a
+        channel mid-close (Negotiating/ShuttingDown/Closing) is settling — neither is spendable. So
+        inbound/outbound + the channel count reflect ONLY open channels (else a fully-closed wallet
+        shows phantom "can send" while getbalance is 0). Closing channels are reported separately so
+        the UI can say "closing — funds settling on-chain". `channels` holds only the open (closeable)
+        ones. hasChannel = at least one open channel — gate the channel-cliff message on this."""
         info = self._get("/getinfo")
         rows = info.get("channels") if isinstance(info, dict) else None
         rows = rows if isinstance(rows, list) else []
-        out, inbound_total, outbound_total, normal = [], 0, 0, 0
+        out, inbound_total, outbound_total, closing = [], 0, 0, 0
         for c in rows:
             if not isinstance(c, dict):
                 continue
             state = str(c.get("state") or "unknown")
-            inbound = _int(c.get("inboundLiquiditySat"))
-            outbound = _int(c.get("balanceSat"))
-            inbound_total += inbound
-            outbound_total += outbound
-            if state == "Normal":
-                normal += 1
-            out.append({"channelId": c.get("channelId"), "state": state,
-                        "inboundSat": inbound, "outboundSat": outbound,
-                        "capacitySat": _int(c.get("capacitySat"))})
-        return {"channels": out, "count": len(out), "normalCount": normal,
+            if state == "Normal":  # open + usable — the only channels with live liquidity
+                inbound = _int(c.get("inboundLiquiditySat"))
+                outbound = _int(c.get("balanceSat"))
+                inbound_total += inbound
+                outbound_total += outbound
+                out.append({"channelId": c.get("channelId"), "state": state,
+                            "inboundSat": inbound, "outboundSat": outbound,
+                            "capacitySat": _int(c.get("capacitySat"))})
+            elif state in _CLOSING_STATES:  # cooperative/force close in flight — settling on-chain
+                closing += 1
+            # Closed / transient (Offline, Syncing, opening…) contribute nothing to live liquidity.
+        return {"channels": out, "count": len(out), "openCount": len(out),
+                "normalCount": len(out), "closingCount": closing,
                 "inboundSat": inbound_total, "outboundSat": outbound_total,
-                "hasChannel": normal > 0, "canReceive": inbound_total > 0}
+                "hasChannel": len(out) > 0, "canReceive": inbound_total > 0}
 
     # --- receive (fund / first-payment to auto-open the channel) -------------
     def receive(self, amount_sat: int | None = None, description: str | None = None) -> dict:
