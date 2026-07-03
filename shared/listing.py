@@ -11,6 +11,7 @@ Nostr relays) in Phase 1 does not change the data model.
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, asdict, field
 from typing import Optional
@@ -18,6 +19,13 @@ from typing import Optional
 # Nostr event kind we reserve for inference host listings (parameterized replaceable
 # range so a host's latest listing supersedes its previous one).
 LISTING_KIND = 38_111
+
+# NIP-40 expiration: relays that honor it drop a listing this many seconds after it's published, so
+# a host that stops re-announcing (dead/paused) auto-purges instead of lingering. Comfortably longer
+# than the daemon's re-announce heartbeat (default 300s) so a LIVE host never expires between beats —
+# each re-announce publishes a fresh event with a fresh expiration. Matches LISTING_STALE_AFTER, the
+# client-side hide window (belt-and-suspenders: relays purge; the client also filters).
+LISTING_EXPIRY_SECONDS = int(os.getenv("LISTING_EXPIRY_SECONDS", "900"))
 
 
 @dataclass
@@ -44,7 +52,9 @@ class HostListing:
             "kind": LISTING_KIND,
             "pubkey": self.pubkey,
             "created_at": self.updated_at,
-            "tags": [["d", self.pubkey], ["n", "inference-net-v0"]],
+            # NIP-40 expiration (relays that honor it auto-drop a stopped host's listing).
+            "tags": [["d", self.pubkey], ["n", "inference-net-v0"],
+                     ["expiration", str(self.updated_at + LISTING_EXPIRY_SECONDS)]],
             "content": json.dumps(
                 {
                     "endpoint": self.endpoint,
