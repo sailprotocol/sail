@@ -52,10 +52,11 @@ def setup_onion(port: int) -> str:
             # active in this session, so Tor's control-auth cookie is unreadable.
             raise TorControlError(
                 "can't read Tor's control-auth cookie — your user isn't in the 'debian-tor' group in "
-                "THIS session. Check with `groups | grep debian-tor`: if it's empty, a plain log-out/in "
-                "or a fresh SSH session often does NOT refresh groups — fully REBOOT (or run "
-                "`exec su - $USER`), then start again. Running as the sail-host systemd service avoids "
-                "this entirely (it starts with the right group from boot)."
+                "THIS session. Fix it WITHOUT logging out or rebooting: run `exec su - $USER` (or "
+                "`newgrp debian-tor`) to start a shell that has the group, then start the host again. "
+                "Verify with `groups | grep debian-tor`. If that still doesn't pick it up, log out "
+                "fully or (last resort) reboot. Best of all, run as the sail-host systemd service "
+                "(go-live installs it) — it starts with the right group from boot, so this can't recur."
             ) from e
         if isinstance(e, (ConnectionError, OSError)) or "refused" in low or "unable to connect" in low:
             raise TorControlError(

@@ -147,18 +147,27 @@ sudo journalctl -u tor@default -n 30 --no-pager   # look for "Address already in
 sudo usermod -aG debian-tor "$USER"
 ```
 
-> ⚠️ This does **not** apply to your current shell — and a plain log-out/in or a new SSH session
-> **often doesn't refresh groups either** (a lingering user session keeps the old group set). If it
-> doesn't take, the daemon can't read Tor's auth cookie and dies with
-> `PermissionError … /run/tor/control.authcookie`. Most reliable: **`sudo reboot`** (or
-> `exec su - $USER`). Then verify — and don't start the host until this lists `debian-tor`:
+> ⚠️ This does **not** apply to your current shell yet. Refresh it **in place — no logout, no
+> reboot** — by starting a shell that has the new group:
+>
+> ```bash
+> exec su - $USER          # or:  newgrp debian-tor
+> ```
+>
+> A plain log-out/in or a new SSH session **often doesn't refresh groups** (a lingering user session
+> keeps the old set); only if `exec su - $USER` doesn't take should you log out fully, and reboot
+> only as a last resort. Otherwise the daemon can't read Tor's auth cookie and dies with
+> `PermissionError … /run/tor/control.authcookie`. Verify — and don't start the host until this
+> lists `debian-tor`:
 
 ```bash
 groups | grep debian-tor         # must list "debian-tor"; empty = not in the group in this session
 ```
 
-> The **sail-host systemd service** (installed at go-live) runs with the right group from boot, so
-> once you're on the service this can't bite you again.
+> **Best of all, run the host as the `sail-host` systemd service** (go-live installs it): a real
+> always-on host should run as the service, not the manual `uvicorn` command — it auto-restarts,
+> survives reboots, and starts with the right groups (Tor) from boot, so this group problem can
+> never recur. The manual command is just for first-run setup.
 
 ---
 

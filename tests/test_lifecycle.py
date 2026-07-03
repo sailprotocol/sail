@@ -104,8 +104,12 @@ def test_cookie_permission_becomes_actionable_debian_tor_error(monkeypatch, tmp_
     try:
         transport.setup_onion(8001)
     except transport.TorControlError as e:
-        assert "debian-tor" in str(e) and "reboot" in str(e).lower()
-        assert "groups | grep debian-tor" in str(e)  # the actionable check
+        msg = str(e)
+        assert "debian-tor" in msg and "groups | grep debian-tor" in msg
+        # lead with the non-disruptive fix; reboot is framed as the LAST resort, after exec su
+        assert "exec su - $USER" in msg
+        assert "(last resort) reboot" in msg
+        assert msg.index("exec su") < msg.index("(last resort) reboot"), "reboot must not lead"
     else:
         raise AssertionError("expected TorControlError for an unreadable auth cookie")
 

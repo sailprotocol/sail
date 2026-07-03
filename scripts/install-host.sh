@@ -154,15 +154,14 @@ else
     ok "Added '$USER' to 'debian-tor'."
   fi
   say ""
-  warn "${B}You must get into the 'debian-tor' group in your session before starting the host.${RST}"
-  say  "  ${YLW}usermod doesn't affect this shell — and a plain log-out/in or a new SSH session"
-  say  "  OFTEN DOES NOT refresh groups (lingering user session / systemd --user).${RST}"
-  say  "  Most reliable, in order:"
-  say  "    1) ${B}sudo reboot${RST}  ${DIM}— guaranteed; the sail-host service also starts with the group from boot${RST}"
-  say  "    2) ${B}exec su - $USER${RST}  ${DIM}— refresh the group in-place (then re-run from a fresh shell)${RST}"
-  say  "  Then VERIFY before starting the host:  ${B}groups | grep debian-tor${RST}  (must list debian-tor)."
-  say  "  ${DIM}Tip: going live installs the sail-host systemd service, which runs with the right group"
-  say  "  from boot and sidesteps this entirely.${RST}"
+  warn "${B}Get into the 'debian-tor' group in your session before starting the host.${RST}"
+  say  "  ${YLW}usermod updated the group, but your CURRENT shell doesn't have it yet.${RST}"
+  say  "  Refresh it in place — ${B}no logout, no reboot${RST}:"
+  say  "    ${B}exec su - $USER${RST}   ${DIM}(or:  newgrp debian-tor)  — starts a shell with the new group${RST}"
+  say  "  Then VERIFY:  ${B}groups | grep debian-tor${RST}   (must list debian-tor)."
+  say  "  ${DIM}If it still doesn't show, log out fully; reboot only as a last resort.${RST}"
+  say  "  ${DIM}Best for an always-on host: go live to install the sail-host systemd service — it runs"
+  say  "  with the right group from boot, so this never bites again (see the final step).${RST}"
 fi
 
 # ── 5. Repo + venv + deps ────────────────────────────────────────────────────
@@ -252,23 +251,33 @@ cat <<EOF
 
 ${GRN}${B}System setup is complete.${RST}
 
-Start the host daemon:
+Start the host daemon (this launches the setup wizard):
 
   ${B}cd $REPO${RST}
   ${B}ENV_FILE=.env.host PYTHONPATH=. .venv/bin/uvicorn host.daemon:app --port 8001${RST}
 
-Then open the setup wizard in your browser (it runs on a separate localhost-only port that is
-never exposed over Tor):
+Then open the wizard in your browser (a separate localhost-only port, never exposed over Tor):
 
   ${B}http://localhost:$OPPORT/setup${RST}
 
-The wizard handles the rest: pull the model, set pricing, pick your payout backend
-(phoenixd / LND / NWC), back up your seed, and go live.
+It walks you through model / pricing / payout / seed backup, then ${B}Go live${RST} — which installs
+the ${B}sail-host systemd service${RST}. That service is how a real always-on host should run: it
+auto-restarts, survives reboots, and starts with the correct groups (Tor) from boot — so the
+manual command above is only for this first-run setup. After go-live, manage it with:
+
+  ${B}sudo systemctl {start,stop,restart} sail-host${RST}   ·   ${B}journalctl -u sail-host -f${RST}
 EOF
 
 if [[ "$GROUP_ACTIVE" -eq 0 ]]; then
   say ""
-  warn "Reminder: get into the debian-tor group FIRST or the daemon can't reach Tor (onion creation"
-  say  "          fails). A plain log-out/in often isn't enough — ${B}sudo reboot${RST} (or ${B}exec su - $USER${RST}),"
-  say  "          then verify: ${B}groups | grep debian-tor${RST}"
+  warn "One thing first: your shell isn't in the 'debian-tor' group yet, so the manual command above"
+  say  "  can't reach Tor (onion creation fails). Refresh it in place — ${B}no logout, no reboot${RST}:"
+  say  "    ${B}exec su - $USER${RST}   ${DIM}(or:  newgrp debian-tor)${RST}"
+  say  "  then ${B}cd $REPO${RST} and run the start command. Verify: ${B}groups | grep debian-tor${RST}."
+  say  "  ${DIM}(Log out fully / reboot only if that doesn't work. Once you go live, the sail-host"
+  say  "  service has the group from boot and this can't recur.)${RST}"
+  if [[ -t 0 ]] && confirm "Drop into a group-refreshed shell now (via newgrp debian-tor)?"; then
+    say "${DIM}Refreshing group… you'll land in a shell that has debian-tor; then run the start command above.${RST}"
+    cd "$REPO" && exec newgrp debian-tor   # replaces this process with a shell that has the group
+  fi
 fi
