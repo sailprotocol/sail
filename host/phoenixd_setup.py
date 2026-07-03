@@ -45,6 +45,30 @@ def install_dir() -> pathlib.Path:
     )
 
 
+# Where the systemd unit lives once installed. A module constant so tests can point it elsewhere.
+PHOENIXD_UNIT_PATH = pathlib.Path("/etc/systemd/system/phoenixd.service")
+
+
+def stable_binary_path() -> pathlib.Path:
+    """Version-independent path used in the phoenixd unit's ExecStart. A symlink kept pointing at the
+    currently-provisioned versioned binary, so the pre-installed unit never needs editing when
+    phoenixd is first downloaded (in the wizard) or later upgraded."""
+    return install_dir() / "phoenixd"
+
+
+def link_current(binary: pathlib.Path) -> None:
+    """Point the stable symlink (stable_binary_path) at the freshly-downloaded versioned binary, so
+    the unit installed by install-host.sh — which references the stable path — resolves. Best-effort."""
+    link = stable_binary_path()
+    try:
+        link.parent.mkdir(parents=True, exist_ok=True)
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(binary)
+    except OSError:
+        pass
+
+
 # --- platform / release resolution ------------------------------------------
 def _platform_tag() -> str:
     sysname, machine = platform.system().lower(), platform.machine().lower()
@@ -230,8 +254,9 @@ def first_run(binary: pathlib.Path, timeout: float = 90.0) -> None:
 
 
 # --- systemd units (pure text; unit-tested) ---------------------------------
-def phoenixd_service_unit(binary: pathlib.Path, user: str | None = None) -> str:
+def phoenixd_service_unit(binary: pathlib.Path | None = None, user: str | None = None) -> str:
     from host.service_setup import current_user  # process owner, not $USER (sudo/su safe)
+    binary = binary or stable_binary_path()  # version-independent symlink (see stable_binary_path)
     user = user or current_user()
     return (
         "[Unit]\n"
@@ -251,13 +276,19 @@ def phoenixd_service_unit(binary: pathlib.Path, user: str | None = None) -> str:
 
 
 def sail_host_dropin() -> str:
-    """Drop-in so sail-host starts after, and is wanted-by, phoenixd when this tier is active."""
-    return "[Unit]\nWants=phoenixd.service\nAfter=phoenixd.service\n"
+    """Drop-in that orders sail-host AFTER phoenixd. `After` ONLY — no `Wants` — so installing this
+    unconditionally (the install script does) is safe even for LND/NWC operators who never enable
+    phoenixd: `After` is a no-op unless phoenixd is in the boot transaction. phoenixd pulls ITSELF
+    into boot via its own `WantedBy=multi-user.target` once it's `enable`d, so the ordering holds
+    for phoenixd hosts without forcing a (broken, unprovisioned) phoenixd start on non-phoenixd ones."""
+    return "[Unit]\nAfter=phoenixd.service\n"
 
 
-def write_units(binary: pathlib.Path, deploy_dir: pathlib.Path | None = None) -> dict:
+def write_units(binary: pathlib.Path | None = None, deploy_dir: pathlib.Path | None = None) -> dict:
     """Write the unit + drop-in into the (gitignored) deploy/ dir and return the install commands.
-    Installation needs root, so we surface the exact commands rather than assume sudo here."""
+    Installation needs root, so we surface the exact commands rather than assume sudo here. The unit
+    references the stable symlink path, so it's valid before the binary is even downloaded."""
+    binary = binary or stable_binary_path()
     deploy_dir = deploy_dir or pathlib.Path(__file__).resolve().parent.parent / "deploy"
     deploy_dir.mkdir(parents=True, exist_ok=True)
     unit = deploy_dir / "phoenixd.service"
@@ -294,6 +325,27 @@ def try_install_units(binary: pathlib.Path, deploy_dir: pathlib.Path | None = No
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         info.update(installed=False, install_required=True, error=str(e))
         return info
+
+
+def ensure_service(binary: pathlib.Path | None = None) -> dict:
+    """Bring phoenixd up as a persistent, boot-enabled systemd service with no manual step.
+
+    FAST PATH (install-host.sh flow): the phoenixd unit is already installed and /etc/sudoers.d/sail
+    permits `systemctl` — so just `enable --now phoenixd` (starts it now, and on every boot). This is
+    what keeps phoenixd RUNNING so the wallet card doesn't hit `[Errno 111] Connection refused`.
+    FALLBACK (manual guide / no sudoers): write the unit files and surface the one-time install
+    commands for the operator to run by hand."""
+    from host import config_writer
+    if PHOENIXD_UNIT_PATH.exists():
+        r = config_writer.service_command("enable", service="phoenixd", flags=("--now",))
+        if r.get("ok"):
+            return {"installed": True, "started": True}
+        # unit present but we can't drive systemctl passwordless — surface just the enable step
+        return {"installed": False, "install_required": True, "error": r.get("error", ""),
+                "install_commands": ["sudo systemctl enable --now phoenixd"]}
+    info = write_units(binary)  # unit not installed (manual path): full one-time install commands
+    info.update(installed=False, install_required=True)
+    return info
 
 
 # --- import an existing wallet ----------------------------------------------
@@ -405,5 +457,6 @@ def provision(version: str | None = None) -> dict:
         "PAYMENTS": "phoenixd",
         "PHOENIXD_API_URL": os.getenv("PHOENIXD_API_URL", "http://127.0.0.1:9740"),
     })
-    install = try_install_units(binary)
+    link_current(binary)             # point the stable symlink the pre-installed unit references
+    install = ensure_service(binary)  # enable+start the persistent service (or surface manual cmds)
     return {"provisioned": True, "seed_words": seed_words, "service": install}

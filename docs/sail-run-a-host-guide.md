@@ -268,11 +268,16 @@ The wizard walks you through:
 2. **Model** — pick/pull the model you want to serve (streams the pull progress).
 3. **Pricing** — sats per token and chunk size (defaults are sane; smaller chunk = tighter
    metering, larger = fewer round-trips over Tor).
-4. **Payout** — choose your backend. Pick **phoenixd** and the wizard downloads, first-runs,
-   and configures it, writing the API password into `.env.host`. (You'll be shown a 12-word
-   seed **once** — write it down; it's your node's recovery.)
-5. **Go live** — renders and installs/enables the `sail-host` service (idempotent if you already
-   installed it above) so the host auto-restarts and survives reboot on the same `.onion` and pubkey.
+4. **Payout** — choose your backend. Pick **phoenixd** and the wizard downloads and first-runs it,
+   then brings it up as its **own enabled `phoenixd` systemd service** (`enable --now`) so it keeps
+   running and restarts on boot — that's what makes the wallet card work with no
+   `[Errno 111] connection refused`. Your API password stays in `~/.phoenix/phoenix.conf` (read
+   live — never copied into `.env.host`). You'll be shown a 12-word seed **once** — write it down;
+   it's your node's recovery.
+5. **Go live** — ensures the `sail-host` service is installed/enabled and **restarts it so the new
+   payout config takes effect with no manual step** (idempotent if the install script already
+   installed it). Both services now survive reboot; on boot `phoenixd` comes up first and
+   `sail-host` is ordered after it, so the wallet works with zero manual steps.
 
 > **How payments work** (pay-to-open channels, fees, your recovery seed, withdraw, close/sweep, and
 > the local-only wallet boundary): see [How payments work on your SAIL host](./sail-payments-explainer.md).
@@ -304,10 +309,14 @@ stays stable across restarts.
 
 ## 6. Verify you're live
 
-After "go live," the host runs as the `sail-host` systemd service.
+After "go live," the host runs as the `sail-host` systemd service — and, on phoenixd, its wallet
+node runs as the `phoenixd` service. Both are enabled, so both come back on reboot (phoenixd first,
+sail-host ordered after it).
 
 ```bash
 systemctl is-active sail-host                 # → active
+systemctl is-active phoenixd                  # → active   (phoenixd payout rail; the wallet card reads it)
+systemctl is-enabled sail-host phoenixd       # → enabled enabled  (both restart on boot)
 # wait for active, THEN check status (querying too early returns empty):
 curl -s http://127.0.0.1:8092/api/status | python3 -m json.tool   # operator port (8092), not the inference port
 ```

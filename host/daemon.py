@@ -1128,8 +1128,9 @@ def setup_golive(request: Request):
     payments = {"tier": tier}
     if tier == "phoenixd":
         from host import phoenixd_setup
-        # phoenixd.service is installed during the payout step; make sure it's started, then ping it.
-        payments["service"] = config_writer.service_command("start", service="phoenixd")
+        # phoenixd.service is installed during the payout step; `enable --now` (not just start) so it
+        # is BOTH running now AND boot-enabled — the reboot guarantee — then ping it.
+        payments["service"] = config_writer.service_command("enable", service="phoenixd", flags=("--now",))
         ok, detail = _ln.ping()
         payments.update(ready=ok, detail=detail)
 
