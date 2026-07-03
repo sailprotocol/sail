@@ -400,11 +400,12 @@ async function refresh(){
   $('hstate').textContent = "You're hosting";
   // The channel-cliff warning is phoenixd-only (LND/NWC have no SAIL-managed channel).
   const cliff = d.payments==='phoenixd' && d.receivable === false;
+  // amber (--beacon-2), not red: "can't receive yet" is the expected next-step for a new host, not an error
   $('hsub').innerHTML = `<b style="color:var(--beacon-2)">${d.alias_label||''}</b> · serving ${d.model} over ${d.transport} · up ${fmtUptime(d.uptime_s)}`
-    + (cliff ? ` · <span style="color:var(--bad)" title="${(d.receive_detail||'').replace(/"/g,'')}">⚠ can’t receive yet — open a channel (~25–35k sat inbound)</span>` : '');
+    + (cliff ? ` · <span style="color:var(--beacon-2)" title="${(d.receive_detail||'').replace(/"/g,'')}">⚠ fund to start earning — open a channel (~25–35k sat inbound)</span>` : '');
   const railName = RAILLABEL[d.payments] || d.payments;
   $('t-rail').textContent = railName;
-  $('c-rail').innerHTML = cliff ? `${railName} — <span style="color:var(--bad)">no channel yet</span>` : railName;
+  $('c-rail').innerHTML = cliff ? `${railName} — <span style="color:var(--beacon-2)">no channel yet</span>` : railName;
   $('t-pub').textContent = (d.pubkey||'').slice(0,8)+'…';
   $('pubfull').textContent = (d.pubkey||'').slice(0,8)+'…'+(d.pubkey||'').slice(-6);
   $('onion').textContent = d.onion; $('copyonion').dataset.c = d.onion;

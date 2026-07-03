@@ -31,6 +31,7 @@ h1,h2,h3{font-family:'Bricolage Grotesque'; letter-spacing:-0.01em; margin:0;}
 .pill.good{border-color:var(--good); color:var(--good);}
 .pill.bad{border-color:var(--bad); color:var(--bad);}
 .pill.q{border-color:var(--line); color:var(--muted);}
+.pill.warn{border-color:var(--beacon-deep); color:var(--beacon-2);}  /* amber: expected next-step, NOT an error */
 
 /* card + key/value rows */
 .card{border:1px solid var(--line); border-radius:14px; background:var(--ink-2); padding:20px 22px; margin-bottom:16px;}
@@ -56,6 +57,7 @@ h1,h2,h3{font-family:'Bricolage Grotesque'; letter-spacing:-0.01em; margin:0;}
 /* note callout */
 .note{font-size:0.85rem; border:1px solid var(--line); border-radius:10px; padding:11px 14px; margin-top:12px; color:var(--muted);}
 .note.bad{border-color:var(--bad); color:#ffb3ad;} .note .mono{color:var(--fg);}
+.note.warn{border-color:var(--beacon-deep); background:var(--warn-bg); color:var(--fg);} .note.warn b{color:var(--beacon-2);}  /* amber next-step, not an error */
 
 /* meters (ease/sovereignty) */
 .meters{display:flex; gap:18px; margin-top:11px;}
