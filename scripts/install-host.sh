@@ -59,10 +59,12 @@ This script will, in order, on this machine:
   1. Check the NVIDIA GPU driver (and install it if missing — then ask you to reboot).
   2. Install Ollama, Tor, and Python tooling (apt).
   3. Enable Tor's control port in /etc/tor/torrc (dedup-safe) and verify it's listening.
-  4. Add your user to the 'debian-tor' group (you'll need to log out/in afterwards).
+  4. Add your user to the 'debian-tor' group.
   5. Get the SAIL repo, create a Python venv, and install dependencies.
   6. Create .env.host from the template and pick a model that fits your VRAM.
-  7. Print the command to start the daemon + open the setup wizard.
+  7. Install & start the sail-host systemd service — it runs the host with Tor access from boot
+     (no shell group-refresh, no manual daemon command).
+  8. Point you at the setup wizard to finish (model pull, pricing, payout, go live).
 
 It uses ${B}sudo${RST} only for the specific steps that need root. It does NOT make any SAIL
 payout/identity choices and does NOT reboot for you. It is safe to re-run.
@@ -77,7 +79,7 @@ say ""; say "${DIM}sudo is needed for driver/packages/torrc/group; you may be pr
 sudo -v || die "sudo is required for system setup."
 
 # ── 1. GPU driver ────────────────────────────────────────────────────────────
-step "1/7  GPU driver"
+step "1/8  GPU driver"
 if nvidia-smi >/dev/null 2>&1; then
   ok "nvidia-smi works — $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1)"
 else
@@ -94,7 +96,7 @@ else
 fi
 
 # ── 2. Ollama + Tor + Python ─────────────────────────────────────────────────
-step "2/7  Ollama, Tor, Python tooling"
+step "2/8  Ollama, Tor, Python tooling"
 if command -v ollama >/dev/null 2>&1; then
   ok "Ollama already installed ($(ollama --version 2>/dev/null | head -n1))"
 else
@@ -108,7 +110,7 @@ sudo apt-get install -y tor python3-venv python3-pip git
 ok "tor, python3-venv, python3-pip, git installed."
 
 # ── 3. Tor control port (dedup-safe) + verify ────────────────────────────────
-step "3/7  Tor control port"
+step "3/8  Tor control port"
 TORRC=/etc/tor/torrc
 # Add each directive only if its key is absent — never duplicate (duplicate directives make Tor
 # fail to start entirely). This mirrors the dedup-safe logic in the run-a-host guide.
@@ -141,7 +143,7 @@ else
 fi
 
 # ── 4. debian-tor group (re-login required) ──────────────────────────────────
-step "4/7  debian-tor group"
+step "4/8  debian-tor group"
 GROUP_ACTIVE=0
 if id -nG "$USER" 2>/dev/null | tr ' ' '\n' | grep -qx debian-tor; then
   ok "'$USER' is in 'debian-tor' and it's active in this session."
@@ -160,12 +162,12 @@ else
   say  "    ${B}exec su - $USER${RST}   ${DIM}(or:  newgrp debian-tor)  — starts a shell with the new group${RST}"
   say  "  Then VERIFY:  ${B}groups | grep debian-tor${RST}   (must list debian-tor)."
   say  "  ${DIM}If it still doesn't show, log out fully; reboot only as a last resort.${RST}"
-  say  "  ${DIM}Best for an always-on host: go live to install the sail-host systemd service — it runs"
-  say  "  with the right group from boot, so this never bites again (see the final step).${RST}"
+  say  "  ${GRN}You can skip all of that:${RST} step 7 installs the sail-host ${B}systemd service${RST}, which"
+  say  "  ${DIM}gets this group from boot and runs outside your shell — so no refresh is needed at all.${RST}"
 fi
 
 # ── 5. Repo + venv + deps ────────────────────────────────────────────────────
-step "5/7  Repo, venv, dependencies"
+step "5/8  Repo, venv, dependencies"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CAND="$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd || true)"
 REPO_URL="https://github.com/sailprotocol/sail.git"
@@ -199,7 +201,7 @@ say "Installing Python dependencies (this can take a minute)…"
 ok "Dependencies installed."
 
 # ── 6. .env.host + model selection ───────────────────────────────────────────
-step "6/7  Host config (.env.host) + model"
+step "6/8  Host config (.env.host) + model"
 if [[ -f .env.host ]]; then
   ok ".env.host already exists — keeping it (and your current settings)."
 else
@@ -247,38 +249,75 @@ fi
 set_env_var "OPERATOR_PORT" "$OPPORT" .env.host
 ok "Operator surface (wizard + dashboard) will use port ${B}$OPPORT${RST} (OPERATOR_PORT in .env.host)."
 
-# ── 7. Hand off to the wizard ────────────────────────────────────────────────
-step "7/7  Next step — start the daemon and finish in the wizard"
+# ── 7. Install & start the sail-host service (default — durable + group-safe) ─
+step "7/8  Install & start the sail-host service"
+SERVICE_UP=0
+say "Running as the ${B}sail-host systemd service${RST} is how a real always-on host should run: it"
+say "starts the daemon with Tor access (debian-tor) ${B}from boot${RST} — so you need NO shell group"
+say "refresh and NO manual daemon command. Decline to start it by hand instead."
+if confirm "Install and start the sail-host service now (recommended)?"; then
+  HOSTPORT="$(grep -E '^PORT=' .env.host 2>/dev/null | head -n1 | cut -d= -f2- | tr -dc '0-9' || true)"
+  HOSTPORT="${HOSTPORT:-8001}"
+  say "Rendering the unit (user ${B}$USER${RST}, repo $REPO, inference port $HOSTPORT)…"
+  # render_unit() fills deploy/sail-host.service.example from the running env (user via pwd, repo via
+  # __file__, venv uvicorn, ENV_FILE, PORT) and the template already sets SupplementaryGroups=debian-tor.
+  if ! PORT="$HOSTPORT" ENV_FILE=.env.host PYTHONPATH="$REPO" .venv/bin/python -c \
+        "import pathlib; from host import service_setup; pathlib.Path('deploy/sail-host.service').write_text(service_setup.render_unit())"; then
+    die "couldn't render the systemd unit — see the error above."
+  fi
+  sudo cp deploy/sail-host.service /etc/systemd/system/sail-host.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable sail-host >/dev/null 2>&1 || true
+  sudo systemctl restart sail-host || true          # || true: check is-active below, don't let set -e abort
+  sleep 3
+  if systemctl is-active --quiet sail-host; then
+    ok "sail-host is ${B}active${RST} and ${B}enabled${RST} — runs independently of your shell, auto-starts on boot."
+    SERVICE_UP=1
+  else
+    warn "The sail-host service didn't come up. Recent logs:"
+    sudo journalctl -u sail-host -n 15 --no-pager 2>/dev/null | sed 's/^/    /'
+    say  "  ${DIM}Fix the cause and 'sudo systemctl restart sail-host', or use the manual start below.${RST}"
+  fi
+else
+  say "Skipping the service — you'll start the host by hand (instructions below)."
+fi
+
+# ── 8. Finish in the wizard ──────────────────────────────────────────────────
+step "8/8  Finish in the setup wizard"
+if [[ "$SERVICE_UP" -eq 1 ]]; then
 cat <<EOF
 
-${GRN}${B}System setup is complete.${RST}
+${GRN}${B}Your host service is running.${RST} Just open the wizard in your browser:
+
+  ${B}http://localhost:$OPPORT/setup${RST}
+
+Finish there: pull the model, set pricing, pick your payout backend (phoenixd / LND / NWC), back up
+your seed, then ${B}Go live${RST}. ${B}No manual daemon command, no group refresh${RST} — the sail-host
+service runs independently of your shell, with Tor access from boot.
+
+Manage it anytime:
+  ${B}sudo systemctl {status,restart,stop} sail-host${RST}   ·   ${B}journalctl -u sail-host -f${RST}
+EOF
+else
+cat <<EOF
+
+${GRN}${B}System setup is complete.${RST}  ${DIM}(no service installed — manual start)${RST}
 
 Start the host daemon (this launches the setup wizard):
 
   ${B}cd $REPO${RST}
   ${B}ENV_FILE=.env.host PYTHONPATH=. .venv/bin/uvicorn host.daemon:app --port 8001${RST}
 
-Then open the wizard in your browser (a separate localhost-only port, never exposed over Tor):
-
-  ${B}http://localhost:$OPPORT/setup${RST}
-
-It walks you through model / pricing / payout / seed backup, then ${B}Go live${RST} — which installs
-the ${B}sail-host systemd service${RST}. That service is how a real always-on host should run: it
-auto-restarts, survives reboots, and starts with the correct groups (Tor) from boot — so the
-manual command above is only for this first-run setup. After go-live, manage it with:
-
-  ${B}sudo systemctl {start,stop,restart} sail-host${RST}   ·   ${B}journalctl -u sail-host -f${RST}
+Then open the wizard: ${B}http://localhost:$OPPORT/setup${RST}
+(pull the model, set pricing, pick payout, back up your seed, go live).
 EOF
-
-if [[ "$GROUP_ACTIVE" -eq 0 ]]; then
-  say ""
-  warn "One thing first: your shell isn't in the 'debian-tor' group yet, so the manual command above"
-  say  "  can't reach Tor (onion creation fails). Refresh it in place — ${B}no logout, no reboot${RST} —"
-  say  "  then run the start command above from that shell:"
-  say  "    ${B}exec su - $USER${RST}   ${DIM}(or:  newgrp debian-tor)${RST}"
-  say  "  Verify with: ${B}groups | grep debian-tor${RST}   (must list debian-tor)."
-  say  "  ${DIM}Log out fully / reboot only if that doesn't work. Once you go live, the sail-host"
-  say  "  service has the group from boot and this can't recur.${RST}"
-  # NOTE: we deliberately do NOT `exec` the refresh shell ourselves — `exec` replaces this process,
-  # which would swallow everything printed after it. The operator runs the line above themselves.
+  if [[ "$GROUP_ACTIVE" -eq 0 ]]; then
+    say ""
+    warn "First: your shell isn't in the 'debian-tor' group, so the manual command can't reach Tor."
+    say  "  Refresh it in place — ${B}no logout, no reboot${RST} — then run the start command from that shell:"
+    say  "    ${B}exec su - $USER${RST}   ${DIM}(or:  newgrp debian-tor)${RST}"
+    say  "  Verify: ${B}groups | grep debian-tor${RST}.  ${DIM}(Or just re-run this script and accept the service.)${RST}"
+    # NOTE: we deliberately never `exec` on the operator's behalf — that would replace this process
+    # and swallow everything printed after it (the step-7 regression). They run the line themselves.
+  fi
 fi

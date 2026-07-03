@@ -28,10 +28,11 @@ chmod +x install-host.sh
 ```
 
 It prints a plan and asks you to confirm before doing anything, uses sudo only where needed,
-never reboots for you, and is safe to re-run. When it finishes it prints the command to start
-your host and the wizard URL. **One thing it can't do for you:** after it adds you to the
-`debian-tor` group, you must **log out and back in** before starting the host (the guide
-explains why under the Tor section).
+never reboots for you, and is safe to re-run. It finishes by **installing and starting the
+`sail-host` systemd service** for you — so when it's done your host is already running and it just
+prints the wizard URL to open. Because the service runs the host with Tor access **from boot**, you
+do **not** need to refresh your shell's `debian-tor` group at all (that footgun only applies to the
+manual foreground-`uvicorn` path below).
 
 **By hand — the manual steps below.** Prefer to understand/audit each step, or not run a
 script? Follow the rest of this guide; it's the exact sequence the script automates.
@@ -141,14 +142,18 @@ sudo journalctl -u tor@default -n 30 --no-pager   # look for "Address already in
 
 **Do not continue until `ss ... grep 9051` shows a LISTENer.**
 
-**4. Let the daemon read Tor's auth cookie — then RE-LOGIN (mandatory):**
+**4. Let the host read Tor's auth cookie — add your user to `debian-tor`:**
 
 ```bash
 sudo usermod -aG debian-tor "$USER"
 ```
 
-> ⚠️ This does **not** apply to your current shell yet. Refresh it **in place — no logout, no
-> reboot** — by starting a shell that has the new group:
+> The `sail-host` **service** picks this group up from boot, so if you run as the service
+> (recommended, Section 4) you're done here — no shell refresh needed. The rest of this note only
+> matters for the **foreground-`uvicorn`** testing path.
+>
+> ⚠️ Adding the group does **not** apply to your current shell yet. Refresh it **in place — no
+> logout, no reboot** — by starting a shell that has the new group:
 >
 > ```bash
 > exec su - $USER          # or:  newgrp debian-tor
@@ -164,10 +169,10 @@ sudo usermod -aG debian-tor "$USER"
 groups | grep debian-tor         # must list "debian-tor"; empty = not in the group in this session
 ```
 
-> **Best of all, run the host as the `sail-host` systemd service** (go-live installs it): a real
-> always-on host should run as the service, not the manual `uvicorn` command — it auto-restarts,
-> survives reboots, and starts with the right groups (Tor) from boot, so this group problem can
-> never recur. The manual command is just for first-run setup.
+> **Best of all, run the host as the `sail-host` systemd service** (Section 4 installs it, and so
+> does the wizard's go-live): a real always-on host should run as the service, not the manual
+> `uvicorn` command — it auto-restarts, survives reboots, and starts with the right groups (Tor)
+> from boot, so this group problem can never recur. The manual command is just for first-run testing.
 
 ---
 
@@ -208,20 +213,54 @@ the wizard.
 
 ---
 
-## 4. Start the daemon → it opens the setup wizard
+## 4. Run the host → open the setup wizard
+
+Run the host as the **`sail-host` systemd service** — that's the always-on path, and it's exactly
+what the install script does. The service starts the daemon with **Tor access from boot** (its unit
+sets `User` + `SupplementaryGroups=debian-tor`), so it runs independently of your shell and you
+**never need a session group-refresh**. A raw foreground `uvicorn` is for first-run/testing only.
+
+### Recommended (always-on): install & start the service
+
+```bash
+# Render the unit from your env (fills user, repo, venv, ENV_FILE, PORT; the template already sets
+# User + SupplementaryGroups=debian-tor), then install and start it:
+PYTHONPATH=. ENV_FILE=.env.host .venv/bin/python -c \
+  "import pathlib; from host import service_setup; pathlib.Path('deploy/sail-host.service').write_text(service_setup.render_unit())"
+sudo cp deploy/sail-host.service /etc/systemd/system/sail-host.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now sail-host
+systemctl is-active sail-host        # → active
+```
+
+A fresh host (mock payments) boots straight into the wizard. The operator surface (wizard,
+dashboard, and wallet) runs on a **separate localhost-only port (8092)** that is never added to the
+Tor hidden service — reachable only from this machine, never over the `.onion`. Open it:
+
+**→ http://localhost:8092/setup**
+
+> Set `OPERATOR_PORT` in `.env.host` to change 8092 (e.g. if the client GUI already uses it). The
+> public **inference** port is 8001 — the port the onion forwards to. Because the service already
+> has the `debian-tor` group, you do **not** need to touch your shell's groups.
+
+### First-run / testing only (NOT always-on): foreground uvicorn
+
+For a quick test without a service, run the daemon in the foreground:
 
 ```bash
 ENV_FILE=.env.host PYTHONPATH=. .venv/bin/uvicorn host.daemon:app --port 8001
 ```
 
-A fresh host (mock payments) boots into the wizard. The operator surface (wizard, dashboard, and
-wallet) runs on a **separate localhost-only port (8092)** that is never added to the Tor hidden
-service — so it can't be reached over the `.onion`, only from this machine. Open it locally:
+This runs **in your shell**, so it needs the `debian-tor` group in *this session*. If `groups`
+doesn't list it yet, refresh it **in place — no logout, no reboot**:
 
-**→ http://localhost:8092/setup**
+```bash
+exec su - $USER        # or:  newgrp debian-tor
+groups | grep debian-tor        # must list debian-tor
+```
 
-> The `--port 8001` above is the **public inference** port the onion forwards to; the operator
-> surface comes up automatically on **8092** (set `OPERATOR_PORT` to change it).
+Then open the same wizard URL. When you're ready for always-on, install the service (above) — or
+just let the wizard's **Go live** step do it.
 
 The wizard walks you through:
 
@@ -232,17 +271,17 @@ The wizard walks you through:
 4. **Payout** — choose your backend. Pick **phoenixd** and the wizard downloads, first-runs,
    and configures it, writing the API password into `.env.host`. (You'll be shown a 12-word
    seed **once** — write it down; it's your node's recovery.)
-5. **Go live** — renders and installs the systemd service so the host auto-restarts and
-   survives reboot on the same `.onion` and pubkey.
+5. **Go live** — renders and installs/enables the `sail-host` service (idempotent if you already
+   installed it above) so the host auto-restarts and survives reboot on the same `.onion` and pubkey.
 
 > **How payments work** (pay-to-open channels, fees, your recovery seed, withdraw, close/sweep, and
 > the local-only wallet boundary): see [How payments work on your SAIL host](./sail-payments-explainer.md).
 
-> **Restarting the wizard.** The wizard *is* the daemon — to restart it, just re-run the `uvicorn`
-> command above (Ctrl-C to stop it first if it's still running), then reopen
-> `http://localhost:8092/setup`. Your progress is written to `.env.host` as you go, so a restart
-> picks up where you left off. **Note:** on startup the daemon creates its onion, so it won't come
-> up until Tor's control port is ready — if it exits immediately, re-check the
+> **Restarting the host / wizard.** On the service (the normal case): `sudo systemctl restart
+> sail-host`, then reopen `http://localhost:8092/setup`. Running foreground instead: Ctrl-C and
+> re-run the `uvicorn` command. Either way your progress is written to `.env.host` as you go, so a
+> restart picks up where you left off. **Note:** on startup the daemon creates its onion, so it won't
+> come up until Tor's control port is ready — if it exits immediately, re-check the
 > [Tor control-port verify step](#enable-tors-control-port-required) (`ss ... grep 9051`).
 
 ---
@@ -329,9 +368,11 @@ inbound first.
   `systemctl is-active tor` says "active". Check `sudo journalctl -u tor@default -n 30 --no-pager`
   for `Address already in use` / `Failed to bind`, remove the duplicate lines, `sudo systemctl
   restart tor`, and re-run the `ss` check. See [Enable Tor's control port](#enable-tors-control-port-required).
-- **Wizard creates the onion but `groups` lacks `debian-tor`** → you added the group but haven't
-  re-logged in. `sudo usermod -aG debian-tor "$USER"` does not affect the current session — log out
-  and back in (or reboot), then confirm with `groups | grep debian-tor`.
+- **Foreground `uvicorn` dies with `PermissionError … /run/tor/control.authcookie` / `groups` lacks
+  `debian-tor`** → `sudo usermod -aG debian-tor "$USER"` doesn't affect the current session. Refresh
+  it in place — **no logout, no reboot**: `exec su - $USER` (or `newgrp debian-tor`), then confirm
+  with `groups | grep debian-tor`. Reboot only as a last resort. **Better:** run the host as the
+  `sail-host` service (Section 4) — it has the group from boot, so this never happens.
 - **Wizard says "no NVIDIA GPU detected" but `nvidia-smi` works** → you likely installed the driver
   without rebooting/relogging. The wizard reads the GPU at startup; reboot (or log out/in) after a
   driver install, then re-run the daemon so it re-detects.
