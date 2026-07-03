@@ -58,6 +58,11 @@ def render_unit(user: str | None = None, workdir: str | None = None, uvicorn: st
             .replace("{{PORT}}", port))
 
 
+def _installed_unit_path(service: str) -> pathlib.Path:
+    """Where systemd looks for the installed unit — indirected so tests can point it at a tmp file."""
+    return pathlib.Path(f"/etc/systemd/system/{service}.service")
+
+
 def install_sail_host_service(service: str = "sail-host") -> dict:
     """Render the unit, write the operator copy (deploy/sail-host.service, gitignored), then try a
     passwordless install + enable --now. Returns {installed: True} or {installed: False,
@@ -66,6 +71,11 @@ def install_sail_host_service(service: str = "sail-host") -> dict:
     _deploy_dir().mkdir(parents=True, exist_ok=True)
     unit = _deploy_dir() / f"{service}.service"
     unit.write_text(render_unit())
+    # Idempotent: when the unit is already installed (install-host.sh installed + started it), don't
+    # try to cp again — /etc/sudoers.d/sail permits systemctl but NOT cp, so a cp attempt would fail
+    # and surface spurious "run these commands" to the wizard. The go-live restart applies the config.
+    if _installed_unit_path(service).exists():
+        return {"installed": True, "already_installed": True, "unit": str(unit)}
     commands = [
         f"sudo cp {unit} /etc/systemd/system/{service}.service",
         "sudo systemctl daemon-reload",

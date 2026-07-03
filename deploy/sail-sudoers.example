@@ -1,17 +1,20 @@
-# SAIL host — optional one-click service control.
+# SAIL host — one-click service control for the setup wizard.
 #
-# The host daemon runs as an unprivileged user, but `sail-host` (and `phoenixd`) are SYSTEM
-# units, so controlling them needs root. Without this file the setup wizard / config-writer still
-# work — they just surface the `sudo systemctl …` command for you to run. Install this drop-in to
-# let them (re)start the services for you, no password prompt.
+# The host daemon runs as an unprivileged user, but `sail-host` and `phoenixd` are SYSTEM units, so
+# controlling them needs root. This drop-in lets the wizard / config-writer (re)start and enable the
+# services for you — no password prompt — which is what makes go-live a single step and keeps
+# phoenixd running (no "[Errno 111] connection refused" on the wallet card). Without it the wizard
+# still works, but surfaces the `sudo systemctl …` commands for you to run by hand.
 #
-# Install once, as root (replace `rob` with your host user if different):
-#   sudo install -m 0440 deploy/sail-sudoers.example /etc/sudoers.d/sail
-#   sudo sed -i 's/^rob /<youruser> /' /etc/sudoers.d/sail      # if not `rob`
+# install-host.sh installs this for you. To do it manually, as root (replace `rob` if your host user
+# differs):
+#   sed 's/^rob /<youruser> /' deploy/sail-sudoers.example | sudo tee /etc/sudoers.d/sail >/dev/null
+#   sudo chmod 0440 /etc/sudoers.d/sail
 #   sudo visudo -cf /etc/sudoers.d/sail                          # validate before trusting it
 #
-# Scope is deliberately narrow: only service control (start/stop/restart/enable/daemon-reload) for
-# exactly these two units — NOT arbitrary file writes. The one-time unit-file installation that
-# phoenixd provisioning needs (copying into /etc/systemd/system) is left as a manual sudo step on
-# purpose, so this rule can't be used to drop in an arbitrary unit.
-rob ALL=(root) NOPASSWD: /usr/bin/systemctl restart sail-host, /usr/bin/systemctl start sail-host, /usr/bin/systemctl stop sail-host, /usr/bin/systemctl disable --now sail-host, /usr/bin/systemctl restart phoenixd, /usr/bin/systemctl start phoenixd, /usr/bin/systemctl enable --now phoenixd, /usr/bin/systemctl daemon-reload
+# Scope is deliberately narrow: ONLY `systemctl` service control (start/stop/restart/enable/disable/
+# daemon-reload) for exactly these two units — NOT arbitrary file writes. The one-time unit-file
+# installation (copying into /etc/systemd/system) is done ONCE by install-host.sh under your own
+# interactive sudo, and the units pin `User=` to your unprivileged account — so this rule can never
+# be used to drop in or run an arbitrary root unit.
+rob ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload, /usr/bin/systemctl restart sail-host, /usr/bin/systemctl start sail-host, /usr/bin/systemctl stop sail-host, /usr/bin/systemctl enable --now sail-host, /usr/bin/systemctl disable --now sail-host, /usr/bin/systemctl restart phoenixd, /usr/bin/systemctl start phoenixd, /usr/bin/systemctl stop phoenixd, /usr/bin/systemctl enable --now phoenixd, /usr/bin/systemctl disable --now phoenixd

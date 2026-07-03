@@ -266,6 +266,34 @@ if confirm "Install and start the sail-host service now (recommended)?"; then
     die "couldn't render the systemd unit — see the error above."
   fi
   sudo cp deploy/sail-host.service /etc/systemd/system/sail-host.service
+
+  # Also install the phoenixd unit + an After-only sail-host drop-in NOW, under your interactive
+  # sudo — so when you pick phoenixd in the wizard it only needs `systemctl enable --now phoenixd`
+  # (no root file-copy at wizard time). The unit points at a stable symlink, so it's valid before
+  # phoenixd is even downloaded, and stays dormant until enabled. Safe for LND/NWC too: the drop-in
+  # is After-only, so it never force-starts an unprovisioned phoenixd.
+  if PYTHONPATH="$REPO" .venv/bin/python -c "from host import phoenixd_setup as p; p.write_units()" 2>/dev/null; then
+    sudo cp deploy/phoenixd.service /etc/systemd/system/phoenixd.service
+    sudo mkdir -p /etc/systemd/system/sail-host.service.d
+    sudo cp deploy/sail-host.service.d-phoenixd.conf /etc/systemd/system/sail-host.service.d/phoenixd.conf
+    ok "Installed the phoenixd service unit (dormant until you pick phoenixd in the wizard)."
+  else
+    warn "Couldn't render the phoenixd unit — the wizard will surface its install commands if you pick phoenixd."
+  fi
+
+  # Narrow one-click sudoers (systemctl-only, for sail-host + phoenixd) so the wizard can start
+  # phoenixd and restart sail-host with no password prompt — this is what makes go-live a single
+  # step and keeps phoenixd running (no Errno 111 on the wallet card).
+  SUDOERS="$(mktemp)"
+  sed "s|^rob |$USER |" deploy/sail-sudoers.example > "$SUDOERS"
+  if sudo visudo -cf "$SUDOERS" >/dev/null 2>&1; then
+    sudo install -m 0440 "$SUDOERS" /etc/sudoers.d/sail
+    ok "Installed /etc/sudoers.d/sail (narrow: systemctl control for sail-host + phoenixd)."
+  else
+    warn "sudoers validation failed — skipping it (go-live will surface manual sudo commands instead)."
+  fi
+  rm -f "$SUDOERS"
+
   sudo systemctl daemon-reload
   sudo systemctl enable sail-host >/dev/null 2>&1 || true
   sudo systemctl restart sail-host || true          # || true: check is-active below, don't let set -e abort

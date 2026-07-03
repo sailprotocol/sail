@@ -165,10 +165,67 @@ def test_provision_does_not_write_password_to_env(tmp_path, monkeypatch):
     monkeypatch.setattr(ps, "secure_seed_files", lambda: {})
     monkeypatch.setattr(ps, "read_http_password", lambda *a, **k: "pw")
     monkeypatch.setattr(ps, "read_seed_words", lambda *a, **k: ["abandon"] * 12)
-    monkeypatch.setattr(ps, "try_install_units", lambda b: {"installed": True})
+    monkeypatch.setattr(ps, "link_current", lambda b: None)              # don't touch real ~/.local
+    monkeypatch.setattr(ps, "ensure_service", lambda b=None: {"installed": True, "started": True})
     ps.provision()
     assert "PHOENIXD_API_PASSWORD" not in captured  # password is NOT copied into .env.host
     assert captured.get("PAYMENTS") == "phoenixd" and "PHOENIXD_API_URL" in captured
+
+
+# ---- persistent phoenixd service: no manual restart, no Errno 111 ----------
+def test_ensure_service_fast_path_enables_when_unit_installed(tmp_path, monkeypatch):
+    """Unit already installed (by install-host.sh) + sudoers present -> just `enable --now`, no cp.
+    This is what keeps phoenixd RUNNING so the wallet card doesn't hit Errno 111."""
+    from host import config_writer
+    unit = tmp_path / "phoenixd.service"; unit.write_text("x")
+    monkeypatch.setattr(ps, "PHOENIXD_UNIT_PATH", unit)
+    calls = {}
+    monkeypatch.setattr(config_writer, "service_command",
+                        lambda action, service=None, flags=(): (calls.update(argv=(action, service, flags)) or {"ok": True}))
+    out = ps.ensure_service()
+    assert out == {"installed": True, "started": True}
+    assert calls["argv"] == ("enable", "phoenixd", ("--now",))  # systemctl enable --now phoenixd
+
+
+def test_ensure_service_surfaces_enable_when_no_sudoers(tmp_path, monkeypatch):
+    from host import config_writer
+    unit = tmp_path / "phoenixd.service"; unit.write_text("x")
+    monkeypatch.setattr(ps, "PHOENIXD_UNIT_PATH", unit)
+    monkeypatch.setattr(config_writer, "service_command",
+                        lambda *a, **k: {"ok": False, "command": "sudo systemctl enable --now phoenixd", "error": "pw"})
+    out = ps.ensure_service()
+    assert out["install_required"] is True
+    assert "systemctl enable --now phoenixd" in out["install_commands"][0]
+
+
+def test_ensure_service_fallback_writes_units_when_unit_absent(tmp_path, monkeypatch):
+    """Manual path (unit not installed) -> write unit files + surface the full one-time install."""
+    monkeypatch.setattr(ps, "PHOENIXD_UNIT_PATH", tmp_path / "absent.service")  # not installed
+    monkeypatch.setattr(ps, "write_units", lambda binary=None, deploy_dir=None: {"install_commands": ["sudo cp ..."]})
+    out = ps.ensure_service()
+    assert out["installed"] is False and out["install_required"] is True
+
+
+def test_phoenixd_unit_uses_stable_symlink_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("PHOENIXD_INSTALL_DIR", str(tmp_path / "px"))
+    unit = ps.phoenixd_service_unit()  # no binary arg -> stable symlink path
+    assert f"ExecStart={tmp_path}/px/phoenixd --agree-to-terms-of-service" in unit
+    assert "User=" in unit
+
+
+def test_sail_host_dropin_is_after_only_not_wants():
+    # After-only so installing it unconditionally is safe for LND/NWC (never force-starts phoenixd)
+    d = ps.sail_host_dropin()
+    assert "After=phoenixd.service" in d and "Wants=" not in d
+
+
+def test_link_current_points_stable_symlink_at_binary(tmp_path, monkeypatch):
+    monkeypatch.setenv("PHOENIXD_INSTALL_DIR", str(tmp_path / "px"))
+    target = tmp_path / "phoenixd-1.0-linux-x64" / "phoenixd"
+    target.parent.mkdir(parents=True); target.write_text("bin")
+    ps.link_current(target)
+    link = ps.stable_binary_path()
+    assert link.is_symlink() and link.resolve() == target.resolve()
 
 
 # ---- import an existing seed -----------------------------------------------

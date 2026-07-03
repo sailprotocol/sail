@@ -107,6 +107,26 @@ def test_install_writes_unit_before_showing_cp_and_uses_running_identity(tmp_pat
     assert res["unit"] == str(unit_path)
 
 
+def test_install_is_idempotent_when_unit_already_present(tmp_path, monkeypatch):
+    """When the unit is ALREADY installed (install-host.sh put it there + started it), install must
+    NOT try to cp again — sudoers permits systemctl but not cp, so a cp attempt would fail and dump
+    spurious 'run these commands' into the wizard. It returns already_installed and lets the restart
+    apply config."""
+    deploy = tmp_path / "deploy"
+    real_template = service_setup.template_path()
+    monkeypatch.setattr(service_setup, "_deploy_dir", lambda: deploy)
+    monkeypatch.setattr(service_setup, "template_path", lambda: real_template)
+    monkeypatch.setenv("SAIL_SERVICE", "sail-host")
+    installed = tmp_path / "sail-host.service"; installed.write_text("present")
+    monkeypatch.setattr(service_setup, "_installed_unit_path", lambda svc: installed)
+    # if cp were attempted this would fail the test by being reached:
+    monkeypatch.setattr(service_setup.subprocess, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not shell out when unit present")))
+    res = service_setup.install_sail_host_service()
+    assert res["installed"] is True and res.get("already_installed") is True
+    assert "commands" not in res  # nothing for the operator to run by hand
+
+
 if __name__ == "__main__":
     # Standalone runner: execute the no-fixture tests directly; the fixtured one runs under pytest.
     simple = [test_render_fills_every_placeholder_from_explicit_values,
