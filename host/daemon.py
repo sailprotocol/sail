@@ -59,7 +59,7 @@ PORT = int(os.getenv("PORT", "8001"))
 ENDPOINT = os.getenv("HOST_ENDPOINT", f"http://127.0.0.1:{PORT}")
 # Operator surface: a separate localhost-only listener (NEVER added to the Tor hidden service).
 OPERATOR_HOST = os.getenv("OPERATOR_HOST", "127.0.0.1")  # keep it loopback — do not bind 0.0.0.0
-OPERATOR_PORT = int(os.getenv("OPERATOR_PORT", "8090"))
+OPERATOR_PORT = int(os.getenv("OPERATOR_PORT", "8092"))  # 8092, not 8090 — the client GUI uses 8090
 
 # --- daemon lifecycle guards (F-lifecycle) ----------------------------------
 # A confused operator who double-starts (manual uvicorn + the sail-host service), or restarts after
@@ -313,7 +313,7 @@ def publish_listing() -> None:
         # Expose the daemon as a .onion and advertise THAT as the endpoint.
         try:
             ENDPOINT = transport.setup_onion(PORT)
-        except transport.OnionCollisionError as e:
+        except (transport.OnionCollisionError, transport.TorControlError) as e:
             _fatal(str(e))  # clear message + no-respawn exit, not a raw stem traceback
         print(f"[host] tor onion endpoint: {ENDPOINT}")
     # F11: don't announce to PUBLIC relays until the host is live-to-serve (post go-live). A fresh

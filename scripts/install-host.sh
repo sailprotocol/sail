@@ -154,10 +154,15 @@ else
     ok "Added '$USER' to 'debian-tor'."
   fi
   say ""
-  warn "${B}You must LOG OUT and back in (or reboot) before starting the host.${RST}"
-  say  "  ${YLW}usermod does not affect this shell session — until you re-login, the daemon"
-  say  "  cannot read Tor's auth cookie and onion creation will fail.${RST}"
-  say  "  After re-login, verify with:  groups | grep debian-tor"
+  warn "${B}You must get into the 'debian-tor' group in your session before starting the host.${RST}"
+  say  "  ${YLW}usermod doesn't affect this shell — and a plain log-out/in or a new SSH session"
+  say  "  OFTEN DOES NOT refresh groups (lingering user session / systemd --user).${RST}"
+  say  "  Most reliable, in order:"
+  say  "    1) ${B}sudo reboot${RST}  ${DIM}— guaranteed; the sail-host service also starts with the group from boot${RST}"
+  say  "    2) ${B}exec su - $USER${RST}  ${DIM}— refresh the group in-place (then re-run from a fresh shell)${RST}"
+  say  "  Then VERIFY before starting the host:  ${B}groups | grep debian-tor${RST}  (must list debian-tor)."
+  say  "  ${DIM}Tip: going live installs the sail-host systemd service, which runs with the right group"
+  say  "  from boot and sidesteps this entirely.${RST}"
 fi
 
 # ── 5. Repo + venv + deps ────────────────────────────────────────────────────
@@ -226,6 +231,21 @@ set_env_var "MODEL" "ollama" .env.host
 set_env_var "OLLAMA_MODEL" "$MODEL" .env.host
 ok "Set OLLAMA_MODEL=$MODEL in .env.host (the wizard will pull it if it isn't downloaded yet)."
 
+# Operator surface port. Default 8092 (the client GUI uses 8090). If it (or an existing OPERATOR_PORT)
+# is already taken — e.g. this box also runs the client — pick the next free port and WRITE it to
+# .env.host, so the wizard/dashboard aren't silently lost to a bind collision.
+port_free() { ! ss -ltn 2>/dev/null | grep -qE ":$1([^0-9]|$)"; }
+OPPORT="$(grep -E '^OPERATOR_PORT=' .env.host | head -n1 | cut -d= -f2- | tr -dc '0-9')"
+OPPORT="${OPPORT:-8092}"
+if ! port_free "$OPPORT"; then
+  warn "Operator port $OPPORT is already in use — selecting a free one…"
+  for p in $(seq "$OPPORT" $(( OPPORT + 20 ))); do
+    if port_free "$p"; then OPPORT="$p"; break; fi
+  done
+fi
+set_env_var "OPERATOR_PORT" "$OPPORT" .env.host
+ok "Operator surface (wizard + dashboard) will use port ${B}$OPPORT${RST} (OPERATOR_PORT in .env.host)."
+
 # ── 7. Hand off to the wizard ────────────────────────────────────────────────
 step "7/7  Next step — start the daemon and finish in the wizard"
 cat <<EOF
@@ -240,7 +260,7 @@ Start the host daemon:
 Then open the setup wizard in your browser (it runs on a separate localhost-only port that is
 never exposed over Tor):
 
-  ${B}http://localhost:8090/setup${RST}
+  ${B}http://localhost:$OPPORT/setup${RST}
 
 The wizard handles the rest: pull the model, set pricing, pick your payout backend
 (phoenixd / LND / NWC), back up your seed, and go live.
@@ -248,6 +268,7 @@ EOF
 
 if [[ "$GROUP_ACTIVE" -eq 0 ]]; then
   say ""
-  warn "Reminder: LOG OUT and back in (or reboot) FIRST — otherwise the daemon can't reach Tor"
-  say  "          and onion creation will fail. After re-login: groups | grep debian-tor"
+  warn "Reminder: get into the debian-tor group FIRST or the daemon can't reach Tor (onion creation"
+  say  "          fails). A plain log-out/in often isn't enough — ${B}sudo reboot${RST} (or ${B}exec su - $USER${RST}),"
+  say  "          then verify: ${B}groups | grep debian-tor${RST}"
 fi

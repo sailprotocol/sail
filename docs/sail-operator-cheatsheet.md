@@ -70,7 +70,7 @@ sudo ss -ltnp 'sport = :8001'                    # add sudo to see the PID holdi
 pgrep -af 'uvicorn host.daemon'    # is a host daemon running? (one line expected)
 pgrep -af phoenixd                 # is phoenixd running? (1050 Ti)
 nvidia-smi                         # GPU + VRAM use
-curl -s localhost:8090/api/status; echo   # this host's own status JSON (operator port, local only)
+curl -s localhost:8092/api/status; echo   # this host's own status JSON (operator port, local only)
 ```
 
 ## Public relays both hosts use
