@@ -49,6 +49,8 @@ def _cmd_list() -> None:
         hidden.append(f"{d['sig_rejected']} by bad signature")
     if d["parse_rejected"]:
         hidden.append(f"{d['parse_rejected']} by parse error")
+    if d.get("stale_hidden"):
+        hidden.append(f"{d['stale_hidden']} stale (host stopped re-announcing)")
     print(f"[client] {len(d['hosts'])} shown" + (f" · hidden: {', '.join(hidden)}" if hidden else ""))
     # Per-listing PoW detail: measured < required, with which host — so a hidden host is
     # diagnosable (e.g. "published with 0 bits" = host isn't grinding PoW) instead of a guess.

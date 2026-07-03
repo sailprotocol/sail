@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import time
 
 from shared.listing import HostListing, LISTING_KIND
 from shared.pow import leading_zero_bits, nip01_id, mine
@@ -34,7 +35,36 @@ def _empty_stats() -> dict:
     """Per-discover() rejection accounting, so the client can show WHY a listing was filtered
     (and not mislabel a signature/parse failure as 'PoW'). pow_hidden carries the measured vs
     required difficulty per rejected listing for an accurate, diagnosable --list line."""
-    return {"pow_rejected": 0, "sig_rejected": 0, "parse_rejected": 0, "pow_hidden": []}
+    return {"pow_rejected": 0, "sig_rejected": 0, "parse_rejected": 0, "pow_hidden": [],
+            "stale_hidden": 0}
+
+
+def _stale_after() -> int:
+    """Seconds after which a listing is treated as DEAD (the host stopped re-announcing). 0 disables.
+    Default ~3× the daemon's 300s re-announce heartbeat, so a live host is never mistakenly hidden
+    but a stopped one drops off within one window."""
+    try:
+        return int(os.getenv("LISTING_STALE_AFTER", "900"))
+    except (TypeError, ValueError):
+        return 900
+
+
+def _drop_stale(listings: list[HostListing], stats: dict) -> list[HostListing]:
+    """Filter out listings whose newest re-announce (updated_at) is older than the stale window, so
+    dead/zombie hosts stop showing even while their event lingers on a relay. Counts drops in
+    stats['stale_hidden'] for a diagnosable --list line. A future/zero timestamp is never stale
+    (tolerates small host-clock skew)."""
+    cutoff = _stale_after()
+    if cutoff <= 0:
+        return listings
+    now = int(time.time())
+    fresh = []
+    for lst in listings:
+        if now - int(lst.updated_at or 0) > cutoff:
+            stats["stale_hidden"] = stats.get("stale_hidden", 0) + 1
+        else:
+            fresh.append(lst)
+    return fresh
 
 
 class RegistryBackend:
@@ -90,7 +120,7 @@ class LocalRegistry(RegistryBackend):
             except Exception:
                 self._stats["parse_rejected"] += 1
                 continue
-        return out
+        return _drop_stale(out, self._stats)
 
 
 def _relays() -> list[str]:
@@ -219,7 +249,7 @@ class NostrRegistry(RegistryBackend):
             prev = by_pubkey.get(listing.pubkey)
             if prev is None or listing.updated_at >= prev.updated_at:  # latest wins
                 by_pubkey[listing.pubkey] = listing
-        return list(by_pubkey.values())
+        return _drop_stale(list(by_pubkey.values()), self._stats)  # hide dead/zombie hosts
 
 
 _backend: RegistryBackend | None = None

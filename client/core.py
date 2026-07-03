@@ -58,7 +58,8 @@ def discover_hosts_detailed() -> dict:
             "pow_rejected": stats.get("pow_rejected", 0),
             "pow_hidden": stats.get("pow_hidden", []),       # [{pubkey, bits, required}]
             "sig_rejected": stats.get("sig_rejected", 0),
-            "parse_rejected": stats.get("parse_rejected", 0)}
+            "parse_rejected": stats.get("parse_rejected", 0),
+            "stale_hidden": stats.get("stale_hidden", 0)}    # dead hosts that stopped re-announcing
 
 
 def proxy_for(endpoint: str) -> str | None:
