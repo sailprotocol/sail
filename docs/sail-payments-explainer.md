@@ -118,7 +118,7 @@ All three live in the dashboard wallet card and run against your own node:
 ## The local-only wallet boundary
 
 Your host serves inference to the world over a Tor **`.onion`** address. The **wallet and operator
-surface do not.** They run on a **separate localhost-only port** (default `8090`) that is **never
+surface do not.** They run on a **separate localhost-only port** (default `8092`) that is **never
 added to the Tor hidden service**, so the dashboard, the wizard, and every wallet action —
 **balance, seed reveal, withdraw, close** — are reachable **only from the machine itself**, never
 over the `.onion`, regardless of any request header.

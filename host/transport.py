@@ -24,6 +24,13 @@ class OnionCollisionError(RuntimeError):
     didn't release it). The message is operator-facing with a recovery step."""
 
 
+class TorControlError(RuntimeError):
+    """Tor's control port couldn't be used — the auth cookie is unreadable (user not in the
+    'debian-tor' group in this session), or Tor isn't running with ControlPort enabled. The message
+    is operator-facing with a concrete recovery step, so the daemon exits clean instead of dumping a
+    raw stem traceback."""
+
+
 def setup_onion(port: int) -> str:
     """Create (or restore) a v3 onion service mapping onion:80 -> 127.0.0.1:port.
 
@@ -35,8 +42,29 @@ def setup_onion(port: int) -> str:
     control_port = int(os.getenv("TOR_CONTROL_PORT", "9051"))
     key_path = pathlib.Path(os.getenv("ONION_KEY_PATH", "./onion.key"))
 
-    _controller = Controller.from_port(port=control_port)
-    _controller.authenticate()  # cookie auth (user must be able to read Tor's auth cookie)
+    try:
+        _controller = Controller.from_port(port=control_port)
+        _controller.authenticate()  # cookie auth (user must be able to read Tor's auth cookie)
+    except Exception as e:  # noqa: BLE001 — translate raw stem/OS errors into an actionable message
+        low = str(e).lower()
+        if isinstance(e, PermissionError) or "cookie" in low:
+            # The single biggest onboarding footgun: user added to 'debian-tor' but the group isn't
+            # active in this session, so Tor's control-auth cookie is unreadable.
+            raise TorControlError(
+                "can't read Tor's control-auth cookie — your user isn't in the 'debian-tor' group in "
+                "THIS session. Fix it WITHOUT logging out or rebooting: run `exec su - $USER` (or "
+                "`newgrp debian-tor`) to start a shell that has the group, then start the host again. "
+                "Verify with `groups | grep debian-tor`. If that still doesn't pick it up, log out "
+                "fully or (last resort) reboot. Best of all, run as the sail-host systemd service "
+                "(go-live installs it) — it starts with the right group from boot, so this can't recur."
+            ) from e
+        if isinstance(e, (ConnectionError, OSError)) or "refused" in low or "unable to connect" in low:
+            raise TorControlError(
+                f"can't reach Tor's control port at 127.0.0.1:{control_port} — is Tor running with "
+                f"ControlPort enabled? Verify `sudo ss -ltnp | grep {control_port}` shows a LISTENer "
+                f"(see the run-a-host guide's Tor setup)."
+            ) from e
+        raise
 
     if key_path.exists():
         key_type, _, key_content = key_path.read_text().strip().partition(":")

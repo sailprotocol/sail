@@ -54,14 +54,16 @@ def test_preflight_invokes_fatal_on_conflict(monkeypatch):
 
 
 # ---- onion address collision ----------------------------------------------
-def _fake_stem(error_message):
-    """Install a fake stem.control whose create_ephemeral_hidden_service raises error_message."""
+def _fake_stem(error_message, auth_error=None):
+    """Install a fake stem.control. authenticate() raises `auth_error` (the cookie/control-port
+    failure path); otherwise create_ephemeral_hidden_service raises `error_message`."""
     class FakeController:
         @classmethod
         def from_port(cls, port):
             return cls()
         def authenticate(self):
-            pass
+            if auth_error is not None:
+                raise auth_error
         def create_ephemeral_hidden_service(self, *a, **k):
             raise Exception(error_message)
 
@@ -91,6 +93,42 @@ def test_onion_other_error_is_not_swallowed(monkeypatch, tmp_path):
         raise AssertionError("a non-collision error must NOT be reported as a collision")
     except Exception as e:
         assert "some other tor failure" in str(e)  # re-raised as-is
+
+
+# ---- Tor control-cookie permission (the debian-tor group footgun) ---------
+def test_cookie_permission_becomes_actionable_debian_tor_error(monkeypatch, tmp_path):
+    # user not in debian-tor -> Tor's control cookie is unreadable -> a bare PermissionError.
+    err = PermissionError(13, "Permission denied: '/run/tor/control.authcookie'")
+    monkeypatch.setitem(sys.modules, "stem.control", _fake_stem("", auth_error=err))
+    monkeypatch.setenv("ONION_KEY_PATH", str(tmp_path / "onion.key"))
+    try:
+        transport.setup_onion(8001)
+    except transport.TorControlError as e:
+        msg = str(e)
+        assert "debian-tor" in msg and "groups | grep debian-tor" in msg
+        # lead with the non-disruptive fix; reboot is framed as the LAST resort, after exec su
+        assert "exec su - $USER" in msg
+        assert "(last resort) reboot" in msg
+        assert msg.index("exec su") < msg.index("(last resort) reboot"), "reboot must not lead"
+    else:
+        raise AssertionError("expected TorControlError for an unreadable auth cookie")
+
+
+def test_control_port_refused_becomes_actionable_error(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "stem.control",
+                        _fake_stem("", auth_error=Exception("[Errno 111] Connection refused")))
+    monkeypatch.setenv("ONION_KEY_PATH", str(tmp_path / "onion.key"))
+    try:
+        transport.setup_onion(8001)
+    except transport.TorControlError as e:
+        assert "control port" in str(e).lower()
+    else:
+        raise AssertionError("expected TorControlError when the control port is unreachable")
+
+
+# ---- operator port default (must not collide with the client GUI on 8090) --
+def test_operator_port_default_is_not_8090():
+    assert d.OPERATOR_PORT == 8092  # client GUI uses 8090; host operator surface uses 8092
 
 
 if __name__ == "__main__":

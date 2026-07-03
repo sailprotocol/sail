@@ -154,10 +154,14 @@ else
     ok "Added '$USER' to 'debian-tor'."
   fi
   say ""
-  warn "${B}You must LOG OUT and back in (or reboot) before starting the host.${RST}"
-  say  "  ${YLW}usermod does not affect this shell session — until you re-login, the daemon"
-  say  "  cannot read Tor's auth cookie and onion creation will fail.${RST}"
-  say  "  After re-login, verify with:  groups | grep debian-tor"
+  warn "${B}Get into the 'debian-tor' group in your session before starting the host.${RST}"
+  say  "  ${YLW}usermod updated the group, but your CURRENT shell doesn't have it yet.${RST}"
+  say  "  Refresh it in place — ${B}no logout, no reboot${RST}:"
+  say  "    ${B}exec su - $USER${RST}   ${DIM}(or:  newgrp debian-tor)  — starts a shell with the new group${RST}"
+  say  "  Then VERIFY:  ${B}groups | grep debian-tor${RST}   (must list debian-tor)."
+  say  "  ${DIM}If it still doesn't show, log out fully; reboot only as a last resort.${RST}"
+  say  "  ${DIM}Best for an always-on host: go live to install the sail-host systemd service — it runs"
+  say  "  with the right group from boot, so this never bites again (see the final step).${RST}"
 fi
 
 # ── 5. Repo + venv + deps ────────────────────────────────────────────────────
@@ -226,28 +230,54 @@ set_env_var "MODEL" "ollama" .env.host
 set_env_var "OLLAMA_MODEL" "$MODEL" .env.host
 ok "Set OLLAMA_MODEL=$MODEL in .env.host (the wizard will pull it if it isn't downloaded yet)."
 
+# Operator surface port. Default 8092 (the client GUI uses 8090). If it (or an existing OPERATOR_PORT)
+# is already taken — e.g. this box also runs the client — pick the next free port and WRITE it to
+# .env.host, so the wizard/dashboard aren't silently lost to a bind collision.
+port_free() { ! ss -ltn 2>/dev/null | grep -qE ":$1([^0-9]|$)"; }
+OPPORT="$(grep -E '^OPERATOR_PORT=' .env.host | head -n1 | cut -d= -f2- | tr -dc '0-9')"
+OPPORT="${OPPORT:-8092}"
+if ! port_free "$OPPORT"; then
+  warn "Operator port $OPPORT is already in use — selecting a free one…"
+  for p in $(seq "$OPPORT" $(( OPPORT + 20 ))); do
+    if port_free "$p"; then OPPORT="$p"; break; fi
+  done
+fi
+set_env_var "OPERATOR_PORT" "$OPPORT" .env.host
+ok "Operator surface (wizard + dashboard) will use port ${B}$OPPORT${RST} (OPERATOR_PORT in .env.host)."
+
 # ── 7. Hand off to the wizard ────────────────────────────────────────────────
 step "7/7  Next step — start the daemon and finish in the wizard"
 cat <<EOF
 
 ${GRN}${B}System setup is complete.${RST}
 
-Start the host daemon:
+Start the host daemon (this launches the setup wizard):
 
   ${B}cd $REPO${RST}
   ${B}ENV_FILE=.env.host PYTHONPATH=. .venv/bin/uvicorn host.daemon:app --port 8001${RST}
 
-Then open the setup wizard in your browser (it runs on a separate localhost-only port that is
-never exposed over Tor):
+Then open the wizard in your browser (a separate localhost-only port, never exposed over Tor):
 
-  ${B}http://localhost:8090/setup${RST}
+  ${B}http://localhost:$OPPORT/setup${RST}
 
-The wizard handles the rest: pull the model, set pricing, pick your payout backend
-(phoenixd / LND / NWC), back up your seed, and go live.
+It walks you through model / pricing / payout / seed backup, then ${B}Go live${RST} — which installs
+the ${B}sail-host systemd service${RST}. That service is how a real always-on host should run: it
+auto-restarts, survives reboots, and starts with the correct groups (Tor) from boot — so the
+manual command above is only for this first-run setup. After go-live, manage it with:
+
+  ${B}sudo systemctl {start,stop,restart} sail-host${RST}   ·   ${B}journalctl -u sail-host -f${RST}
 EOF
 
 if [[ "$GROUP_ACTIVE" -eq 0 ]]; then
   say ""
-  warn "Reminder: LOG OUT and back in (or reboot) FIRST — otherwise the daemon can't reach Tor"
-  say  "          and onion creation will fail. After re-login: groups | grep debian-tor"
+  warn "One thing first: your shell isn't in the 'debian-tor' group yet, so the manual command above"
+  say  "  can't reach Tor (onion creation fails). Refresh it in place — ${B}no logout, no reboot${RST}:"
+  say  "    ${B}exec su - $USER${RST}   ${DIM}(or:  newgrp debian-tor)${RST}"
+  say  "  then ${B}cd $REPO${RST} and run the start command. Verify: ${B}groups | grep debian-tor${RST}."
+  say  "  ${DIM}(Log out fully / reboot only if that doesn't work. Once you go live, the sail-host"
+  say  "  service has the group from boot and this can't recur.)${RST}"
+  if [[ -t 0 ]] && confirm "Drop into a group-refreshed shell now (via newgrp debian-tor)?"; then
+    say "${DIM}Refreshing group… you'll land in a shell that has debian-tor; then run the start command above.${RST}"
+    cd "$REPO" && exec newgrp debian-tor   # replaces this process with a shell that has the group
+  fi
 fi
