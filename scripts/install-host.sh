@@ -234,7 +234,9 @@ ok "Set OLLAMA_MODEL=$MODEL in .env.host (the wizard will pull it if it isn't do
 # is already taken — e.g. this box also runs the client — pick the next free port and WRITE it to
 # .env.host, so the wizard/dashboard aren't silently lost to a bind collision.
 port_free() { ! ss -ltn 2>/dev/null | grep -qE ":$1([^0-9]|$)"; }
-OPPORT="$(grep -E '^OPERATOR_PORT=' .env.host | head -n1 | cut -d= -f2- | tr -dc '0-9')"
+# `|| true`: a fresh .env.host has no OPERATOR_PORT line, so grep exits 1 — without this the
+# `set -euo pipefail` at the top would kill the script right here (before step 7).
+OPPORT="$(grep -E '^OPERATOR_PORT=' .env.host 2>/dev/null | head -n1 | cut -d= -f2- | tr -dc '0-9' || true)"
 OPPORT="${OPPORT:-8092}"
 if ! port_free "$OPPORT"; then
   warn "Operator port $OPPORT is already in use — selecting a free one…"
@@ -271,13 +273,12 @@ EOF
 if [[ "$GROUP_ACTIVE" -eq 0 ]]; then
   say ""
   warn "One thing first: your shell isn't in the 'debian-tor' group yet, so the manual command above"
-  say  "  can't reach Tor (onion creation fails). Refresh it in place — ${B}no logout, no reboot${RST}:"
+  say  "  can't reach Tor (onion creation fails). Refresh it in place — ${B}no logout, no reboot${RST} —"
+  say  "  then run the start command above from that shell:"
   say  "    ${B}exec su - $USER${RST}   ${DIM}(or:  newgrp debian-tor)${RST}"
-  say  "  then ${B}cd $REPO${RST} and run the start command. Verify: ${B}groups | grep debian-tor${RST}."
-  say  "  ${DIM}(Log out fully / reboot only if that doesn't work. Once you go live, the sail-host"
-  say  "  service has the group from boot and this can't recur.)${RST}"
-  if [[ -t 0 ]] && confirm "Drop into a group-refreshed shell now (via newgrp debian-tor)?"; then
-    say "${DIM}Refreshing group… you'll land in a shell that has debian-tor; then run the start command above.${RST}"
-    cd "$REPO" && exec newgrp debian-tor   # replaces this process with a shell that has the group
-  fi
+  say  "  Verify with: ${B}groups | grep debian-tor${RST}   (must list debian-tor)."
+  say  "  ${DIM}Log out fully / reboot only if that doesn't work. Once you go live, the sail-host"
+  say  "  service has the group from boot and this can't recur.${RST}"
+  # NOTE: we deliberately do NOT `exec` the refresh shell ourselves — `exec` replaces this process,
+  # which would swallow everything printed after it. The operator runs the line above themselves.
 fi
