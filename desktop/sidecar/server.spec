@@ -10,7 +10,13 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 # Paths in a spec resolve relative to the spec's dir (SPECPATH); anchor on the repo root.
 REPO = os.path.abspath(os.path.join(SPECPATH, os.pardir, os.pardir))
 
-datas = [(os.path.join(REPO, "client", "static"), "client/static")]  # FileResponse(_STATIC/"index.html")
+datas = [
+    (os.path.join(REPO, "client", "static"), "client/static"),   # FileResponse(_STATIC/"index.html")
+    # The client's index.html links `sail.css`, which webapp.py serves from host/static/sail.css
+    # (single source of the SAIL theme). Without this it's missing from the bundle -> 404 -> the
+    # design tokens (var(--beacon)/var(--line)) are undefined -> plain unstyled black-and-white.
+    (os.path.join(REPO, "host", "static", "sail.css"), "host/static"),
+]
 binaries = []
 hiddenimports = ["client.webapp"] + collect_submodules("uvicorn")
 
