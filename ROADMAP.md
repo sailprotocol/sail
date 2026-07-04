@@ -114,6 +114,21 @@ Follow-ups for the web client (`client/webapp.py` + `client/static/`, shared log
   the host confirms settlement via its own LND, then streams. NWC stays the fine-grained automated
   path. **Known v1 gap:** a manual payment that settles but whose inference then fails is **not
   refunded** (user bounds spend via `max_tokens`); needs settlement-aware refund/credit later.
+- **NWC wallet-reachability UX** *(real mobile-wallet friction)*. NWC needs the **wallet** online
+  and connected to its relay to answer each payment request — a mobile wallet that's asleep (phone
+  locked / Zeus backgrounded) can't, even when the client's own relay connection is fine. Today the
+  client shows green **"connected"** on client-readiness alone, then a payment fails with a generic
+  error. Two fixes: (1) make "connected" reflect **wallet** reachability — periodically do a
+  lightweight NWC `get_info` ping and show "connected" only when the wallet actually responds, else
+  **"wallet not responding — open your wallet app (e.g. Zeus)"** (never green when a payment would
+  fail); (2) on a pay failure from no wallet response, surface **"payment failed: your NWC wallet
+  didn't respond — make sure your wallet app is open and online"** instead of a generic error. Code:
+  `client/wallet.py` (NWC), `client/core.py`, `client/static/index.html`. Reported from real Zeus use.
+- **Prepaid / refundable client balance (NWC-alternative).** A funded, refundable client credit
+  (top up once, spend per token, withdraw the remainder) **sidesteps needing the wallet live for
+  every payment** — the deeper fix for the mobile-wallet friction above, and it also closes the
+  manual-pay no-refund gap. Larger design (client identity + credit state + refund path); defer past
+  the immediate NWC-reachability polish, but this is the direction.
 - **Latency robustness.** Per-token streaming so the user sees progress mid-chunk (not just at
   chunk boundaries); tune `CHUNK_TOKENS` vs. payment round-trips; show a clear "still
   generating…" state instead of a silent wait/timeout. (Server keeps the model warm via
