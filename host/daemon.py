@@ -182,6 +182,28 @@ def _issue_chunk_challenge(sid: str) -> dict:
 # How often to re-announce the listing so it stays fresh on public relays (set 0 to disable).
 REANNOUNCE_SECONDS = int(os.getenv("LISTING_REANNOUNCE_SECONDS", "300"))
 
+# --- pause (in-process, NOT `systemctl stop`) -------------------------------
+# Pause keeps THIS process (and the localhost-only operator surface) running, and just stops serving
+# inference + announcing the listing. It CANNOT be done by stopping the sail-host systemd unit: the
+# dashboard is served by this very process, so `systemctl stop sail-host` would kill the surface that
+# drives Resume — and a self-stop deadlocks systemd's stop job against the in-flight request (it times
+# out, then SIGKILLs us). So pause is a persisted flag: the host stays reachable to its operator,
+# Resume works, and phoenixd is left untouched (the wallet stays usable while paused).
+_PAUSE_FLAG = pathlib.Path(os.path.expanduser(
+    os.getenv("PAUSE_FLAG_PATH", str(pathlib.Path.home() / ".local/state/sail/paused"))))
+
+
+def _is_paused() -> bool:
+    return _PAUSE_FLAG.exists()
+
+
+def _set_paused(paused: bool) -> None:
+    if paused:
+        _PAUSE_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        _PAUSE_FLAG.write_text("paused\n")
+    else:
+        _PAUSE_FLAG.unlink(missing_ok=True)
+
 
 def _live_to_serve() -> bool:
     """True once a real payout backend is configured. A fresh host in the setup wizard runs with
@@ -236,7 +258,7 @@ def _reannounce_loop(interval: int) -> None:
     time, so a heartbeat keeps the host discoverable instead of vanishing between client queries."""
     while True:
         time.sleep(interval)
-        if _public_publish_withheld():  # same gate as startup: never heartbeat a not-yet-live host
+        if _is_paused() or _public_publish_withheld():  # don't heartbeat a paused or not-yet-live host
             continue
         try:
             _log_publish(registry.publish(_build_listing()), f"re-announce ({alias_label(PUBKEY)})")
@@ -318,14 +340,16 @@ def publish_listing() -> None:
         print(f"[host] tor onion endpoint: {ENDPOINT}")
     # F11: don't announce to PUBLIC relays until the host is live-to-serve (post go-live). A fresh
     # host still in the wizard would otherwise leak a ghost listing that can't serve.
-    withheld = _public_publish_withheld()
+    withheld = _public_publish_withheld() or ("host is paused — not announcing" if _is_paused() else None)
     if withheld:
         print(f"[host] {withheld}")
-        return
-    result = registry.publish(_build_listing())  # signed, PoW-mined, parameterized-replaceable
-    print(f"[host] published listing: {alias_label(PUBKEY)} [{PUBKEY}] "
-          f"serving {_model.name} @ {ENDPOINT}")
-    _log_publish(result, "publish")  # show which relays actually accepted (or that none did)
+    else:
+        result = registry.publish(_build_listing())  # signed, PoW-mined, parameterized-replaceable
+        print(f"[host] published listing: {alias_label(PUBKEY)} [{PUBKEY}] "
+              f"serving {_model.name} @ {ENDPOINT}")
+        _log_publish(result, "publish")  # show which relays actually accepted (or that none did)
+    # Always start the heartbeat (it self-gates on pause / not-yet-live), so Resume after a
+    # boot-while-paused restores periodic re-announces without needing a restart.
     if REANNOUNCE_SECONDS > 0:
         threading.Thread(target=_reannounce_loop, args=(REANNOUNCE_SECONDS,),
                          daemon=True, name="sail-reannounce").start()
@@ -340,6 +364,10 @@ def models() -> dict:
 
 @app.post("/v1/inference")
 async def inference(request: Request, authorization: str | None = Header(default=None)):
+    # Paused hosts stay reachable (so the operator can Resume) but don't serve — tell clients cleanly.
+    if _is_paused():
+        return JSONResponse({"error": "host is paused and not serving requests right now"},
+                            status_code=503)
     # Guard the body: junk/empty input must be a clean 400, never a 500 stack trace (a 500 on
     # garbage is a cheap DoS surface). A well-formed body still flows on to the 402 challenge.
     try:
@@ -639,6 +667,7 @@ def api_status(request: Request):
         "transport": TRANSPORT,
         "model": _model.name,
         "payments": os.getenv("PAYMENTS", "mock").lower(),
+        "paused": _is_paused(),          # in-process pause: reachable to operator, not serving/announcing
         "payments_ready": pay_ok,        # payment backend API is responding (host is payable)
         "payments_detail": pay_detail,
         "receivable": _h["receivable"],          # can actually RECEIVE (phoenixd channel-cliff guard)
@@ -1155,38 +1184,62 @@ def setup_golive(request: Request):
 
 
 # --- host controls (LOCAL ONLY) ---------------------------------------------
-# Pause/Resume/Stop&remove the sail-host systemd unit. Same .onion gate as the dashboard. All reuse
-# config_writer.service_command (try `sudo -n`, else surface the command) — no new mechanism. None
-# of these touch ~/.phoenix, the onion key, or the nsec; remove only affects the systemd unit.
+# Pause/Resume are IN-PROCESS (a persisted flag) — NOT `systemctl stop` — so the operator surface
+# stays up and Resume works, phoenixd is untouched, and there's no self-stop deadlock. Stop & remove
+# genuinely tears down the systemd unit (the operator is leaving), done via a DEFERRED background
+# call so the response returns before systemd stops this process. Same .onion gate as the dashboard.
 @operator_app.post("/api/control/pause")
 def control_pause(request: Request):
-    """Stop the service: listing goes stale, daemon stops. Resume brings the same identity back."""
+    """Pause serving in-process: stop inference (clients get 503) and stop announcing the listing,
+    but keep the daemon + operator surface up so Resume works. Same onion + pubkey on resume."""
     if not _is_local(request):
         return _NOT_FOUND
-    from host import config_writer
-    return config_writer.service_command("stop")
+    _set_paused(True)
+    return {"ok": True, "paused": True}
 
 
 @operator_app.post("/api/control/resume")
 def control_resume(request: Request):
+    """Clear the pause flag and re-announce immediately (don't wait for the next heartbeat)."""
     if not _is_local(request):
         return _NOT_FOUND
+    _set_paused(False)
+    announced = None
+    try:
+        if not _public_publish_withheld():
+            _log_publish(registry.publish(_build_listing()), f"resume re-announce ({alias_label(PUBKEY)})")
+            announced = True
+    except Exception as e:  # noqa: BLE001 — resume succeeds even if a relay hiccups; heartbeat retries
+        print(f"[host] resume re-announce failed: {e}")
+        announced = False
+    return {"ok": True, "paused": False, "announced": announced}
+
+
+def _deferred_service_teardown(delay: float = 1.0) -> None:
+    """Disable + stop sail-host AFTER a short delay, in a background thread, so the HTTP response is
+    delivered before systemd stops this process (avoids the self-stop deadlock). Best-effort sudo -n."""
     from host import config_writer
-    return config_writer.service_command("start")
+
+    def _run():
+        time.sleep(delay)
+        config_writer.service_command("disable", flags=("--now",))  # won't start on boot + stop now
+    threading.Thread(target=_run, daemon=True, name="sail-teardown").start()
 
 
 @operator_app.post("/api/control/remove")
 async def control_remove(request: Request):
-    """Disable + stop the unit now; the unit-FILE deletion still needs a manual sudo step (we never
-    auto-rm a system unit), so those commands are surfaced. Gated by type-to-confirm. Funds/keys in
-    ~/.phoenix are NOT touched."""
+    """Stop & remove: the operator is leaving the network. We pause serving immediately (in-process),
+    then DEFER `disable --now` so the response returns before systemd stops us (no deadlock). The
+    unit-FILE deletion is always a manual sudo step (we never auto-rm a system unit). Gated by
+    type-to-confirm. Funds/keys in ~/.phoenix are NOT touched."""
     if not _is_local(request):
         return _NOT_FOUND
     if (await request.json()).get("confirm") != "remove":
         return JSONResponse({"error": "type-to-confirm required"}, status_code=400)
     from host import config_writer
     svc = config_writer.SERVICE
-    disable = config_writer.service_command("disable", flags=("--now",))
-    return {"disable": disable,
+    _set_paused(True)                 # immediately offline (in-process), consistent with pause
+    _deferred_service_teardown()      # disable + stop after we respond — no self-stop deadlock
+    return {"ok": True, "paused": True,
             "manual_commands": [f"sudo rm /etc/systemd/system/{svc}.service",
                                 "sudo systemctl daemon-reload"]}
