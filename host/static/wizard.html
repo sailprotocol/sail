@@ -473,7 +473,7 @@ async function goLive(){
   // Surface anything that needs root we couldn't do passwordless (install the unit, restart, etc.).
   const cmds=(res&&res.commands)||(res&&res.restart_required?[res.command]:[]);
   if(cmds.length){
-    $('manualrestart').style.display='block';
+    $('manualrestart').style.display='block'; $('manualrestart').className='note';
     $('manualrestart').innerHTML='Almost there — run these to install &amp; start your host as a service, then this page finishes automatically:<br>'
       + cmds.map(c=>`<span class="mono">${c}</span>`).join('<br>');
   }
@@ -505,22 +505,42 @@ async function liveDone(st){
   const canReceive = st.receivable !== false;   // false = phoenixd has no inbound channel yet
   const earning = payable && canReceive;
   $('liveh').textContent = earning ? 'Your host is live'
-    : (!payable ? 'Host running — but not payable yet' : 'Host running — but can’t receive yet');
+    : (!payable ? 'Host running — but not payable yet' : 'Host running — fund it to start earning');
+  // amber = expected next step (a new host just needs funding); red = an actual problem (backend down)
+  $('liveh').style.color = earning ? '' : (!payable ? 'var(--bad)' : 'var(--beacon-2)');
   const pub=st.pubkey||''; $('alias').textContent = st.alias_label || ('host · '+pub.slice(0,4));
   $('l-onion').textContent=st.onion; $('l-pub').textContent=pub.slice(0,8)+'…'+pub.slice(-6);
   $('l-pay').innerHTML = !payable ? `<span class="pill bad">● ${st.payments_detail||'not responding'}</span>`
     : canReceive ? `<span class="pill good">● ${st.payments} ready</span>`
-    : `<span class="pill bad">● ${st.payments} — no channel yet</span>`;
-  // phoenixd channel cliff: discoverable + serving, but clients can't pay until a channel opens
+    : `<span class="pill warn">● ${st.payments} — no channel yet</span>`;   // amber, not red: normal for a new host
+  // phoenixd channel cliff: discoverable + serving, but clients can't pay until a channel opens. This
+  // is the EXPECTED next step for a brand-new host — show it amber (note.warn), not as an error.
   if (payable && !canReceive){
-    $('manualrestart').style.display='block';
-    $('manualrestart').innerHTML = `<b>Can’t receive payments yet.</b> ${st.receive_detail||''}<br>`
-      + `Your host is discoverable and will serve, but clients can’t pay you until phoenixd has an `
-      + `inbound channel. Open one by paying your node an initial <b>~25–35k sat</b> from another wallet.`;
+    $('manualrestart').style.display='block'; $('manualrestart').className='note warn';
+    $('manualrestart').innerHTML = `<b>Next step: fund your host to start earning.</b> ${st.receive_detail||''}<br>`
+      + `It's already discoverable and will serve — clients just can’t pay you until phoenixd has an `
+      + `inbound channel. Open one by paying your node an initial <b>~25–35k sat</b> from another wallet `
+      + `(the dashboard has a Receive button). This is normal for a new host.`;
   }
-  try{ const t=await api('/api/selftest'); $('l-test').innerHTML = t.ok? '<span class="pill good">● 402 passing</span>' : '<span class="pill bad">● failed</span>'; }
-  catch{ $('l-test').innerHTML='<span class="pill q">unavailable</span>'; }
+  runSelftest();
   nextBtn.disabled=false; nextBtn.textContent='Open dashboard'; nextBtn.onclick=()=>{ window.location='/'; };
+}
+
+// Self-test = can a client reach us and get a 402 + invoice? It is FUNDING-INDEPENDENT (needs no
+// channel and does no payment round-trip). So a miss right after go-live is almost always the freshly
+// published onion still propagating over Tor — transient: amber + retry, NOT a red failure. Red is
+// reserved for a genuine wrong response (we were reached but didn't answer 402).
+async function runSelftest(){
+  $('l-test').innerHTML='<span class="pill q">checking…</span>';
+  let t; try{ t=await api('/api/selftest'); }catch{ $('l-test').innerHTML='<span class="pill q">unavailable</span>'; return; }
+  if(t.ok){ $('l-test').innerHTML='<span class="pill good">● 402 passing</span>'; return; }
+  if(t.category==='unreachable'){
+    $('l-test').innerHTML='<span class="pill warn">● onion still propagating</span> '
+      +'<a href="#" id="l-retry" style="font-size:0.72rem;color:var(--beacon-2)">retry</a>';
+    $('l-retry').onclick=(e)=>{ e.preventDefault(); runSelftest(); };
+  } else {
+    $('l-test').innerHTML=`<span class="pill bad">● failed${t.status?` (HTTP ${t.status})`:''}</span>`;
+  }
 }
 
 // a11y: info tooltips open on focus (CSS) and dismiss on Escape.

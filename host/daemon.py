@@ -668,10 +668,17 @@ def api_selftest(request: Request):
         r = httpx.post(f"{ENDPOINT}/v1/inference", json={"prompt": "selftest", "max_tokens": 1},
                        proxy=proxy, timeout=45.0)
         ok = r.status_code == 402 and "invoice" in r.text
+        # This check is FUNDING-INDEPENDENT: a 402 + invoice is issued even with no channel (phoenixd
+        # mints the invoice; paying it is what opens the channel). So `ok=False` here means we reached
+        # ourselves but didn't get a 402 — a genuine serving problem ("bad_status"), not "needs funding".
         return {"ok": ok, "status": r.status_code, "via": via,
+                "category": "ok" if ok else "bad_status",
                 "latency_ms": round((time.monotonic() - t0) * 1000)}
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "via": via, "error": str(e)[:140]}
+        # Couldn't reach our own endpoint at all. Over Tor this is almost always the freshly-published
+        # onion still propagating (transient) — NOT a serving failure. Flagged so the UI shows it amber
+        # ("still propagating — retry"), reserving red for a genuine bad response above.
+        return {"ok": False, "via": via, "category": "unreachable", "error": str(e)[:140]}
 
 
 # --- host wallet (LOCAL ONLY — moves money) ---------------------------------
