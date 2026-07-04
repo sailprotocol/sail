@@ -289,10 +289,10 @@ function num(n){ return (n||0).toLocaleString(); }
 // (paused vs stopped vs a genuine crash). A successful status always means we're live.
 let mode='live', intent=null;
 const CTL = {
-  live:{ note:'Pause withdraws your listing and stops the daemon — clients see you offline. Resume brings the same onion + pubkey straight back.',
+  live:{ note:'Pause stops serving and withdraws your listing — clients see you offline — while this dashboard and your wallet stay up. Resume re-announces on the same onion + pubkey instantly.',
          btns:[['Pause hosting','primary','pause'],['Stop & remove…','danger','remove']] },
-  paused:{ state:'Hosting paused', sub:'Listing withdrawn · daemon stopped · clients see you offline',
-           note:'Your identity is preserved. Resume restarts the daemon on the same onion + pubkey.',
+  paused:{ state:'Hosting paused', sub:'Not serving · listing withdrawn · clients see you offline · dashboard + wallet still available',
+           note:'Your identity and phoenixd wallet stay available while paused — you can still receive/withdraw. Resume re-announces on the same onion + pubkey.',
            btns:[['Resume hosting','primary','resume'],['Stop & remove…','danger','remove']] },
   stopped:{ state:'Hosting stopped', sub:'Service removed · will not start on boot',
             note:'You’ve left the network. Funds (if phoenixd) remain in ~/.phoenix. Set up again anytime.',
@@ -353,26 +353,23 @@ function surfaceCmds(title, cmds, selfStop, after){
 }
 
 async function doControl(action, endpoint, target){
+  // Pause/Resume are in-process now: the operator surface stays up, so this returns {ok:true} and
+  // never a "run this manually" command. (The legacy command branch stays only as a safety net.)
   let res=null;
-  try{ res = await (await fetch(endpoint,{method:'POST'})).json(); }catch{ res=null; }  // self-stop may drop the connection
+  try{ res = await (await fetch(endpoint,{method:'POST'})).json(); }catch{ res=null; }
   if(res && res.ok===false && res.command){
     surfaceCmds('Run this to '+action, [res.command], action!=='resume', ()=>finalize(action,target));
     return;
   }
-  finalize(action,target);  // sudo -n worked, or the connection dropped because we stopped
+  finalize(action,target);  // in-process pause/resume succeeded; refresh() confirms from /api/status
 }
 async function doRemove(){
   let res=null;
   try{ res = await (await fetch('/api/control/remove',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({confirm:'remove'})})).json(); }catch{ res=null; }
-  const cmds=[];
-  if(res){
-    if(res.disable && res.disable.ok===false && res.disable.command) cmds.push(res.disable.command);
-    (res.manual_commands||[]).forEach(c=>cmds.push(c));
-  }else{
-    cmds.push('sudo rm /etc/systemd/system/sail-host.service','sudo systemctl daemon-reload');
-  }
-  // Removal always has a manual unit-file step, so always surface it.
-  surfaceCmds('Run these to finish removing', cmds, true, ()=>finalize('remove','stopped'));
+  // The host is offline immediately (in-process pause) and the service is disabled+stopped in the
+  // background; the unit-file rm is the one genuinely-manual step left, so surface it.
+  const cmds=(res&&res.manual_commands)||['sudo rm /etc/systemd/system/sail-host.service','sudo systemctl daemon-reload'];
+  surfaceCmds('You’re offline. Run these to finish removing the service', cmds, true, ()=>finalize('remove','stopped'));
 }
 function finalize(action,target){
   if(action==='pause'){ intent='paused'; setMode('paused'); }
@@ -394,7 +391,9 @@ async function refresh(){
     return;
   }
   if(d.error){ $('hstate').textContent='Unavailable'; return; }
-  // status answered → we are live (clears any pause/stop intent if the daemon is actually serving)
+  // Paused is now authoritative from status (the daemon stays up while paused) — reflect it directly.
+  if(d.paused){ intent='paused'; if(mode!=='paused') setMode('paused'); return; }
+  // status answered + not paused → we are live (clears any stale pause/stop intent)
   intent=null; if(mode!=='live'){ mode='live'; $('hero').className='hero'; renderControls('live'); }
   $('led').className='led ok';
   $('hstate').textContent = "You're hosting";

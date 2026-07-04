@@ -97,7 +97,9 @@ fn main() {
             let port = free_port();
             let mut env: HashMap<String, String> = HashMap::new();
             env.insert("REGISTRY".into(), "nostr".into());
-            env.insert("NOSTR_RELAYS".into(), "wss://relay.damus.io".into());
+            // Two relays, not one: a single relay is a discovery SPOF — if it's slow to connect on a
+            // cold start the 5s fetch can return empty ("No hosts found") even when a host is live.
+            env.insert("NOSTR_RELAYS".into(), "wss://relay.damus.io,wss://nos.lol".into());
             env.insert("PAYMENTS".into(), "nwc".into());
             env.insert("TOR_SOCKS".into(), format!("socks5h://127.0.0.1:{tor_socks}"));
             env.insert("REGISTRY_DIR".into(), s(data.join("registry")));
